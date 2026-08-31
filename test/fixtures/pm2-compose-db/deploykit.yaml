@@ -1,0 +1,77 @@
+apiVersion: deploykit/v1alpha1
+metadata:
+  name: pm2-compose-db
+  requiredVersion: 0.1.0
+compose:
+  files: [compose.yaml]
+services:
+  api:
+    type: pm2
+    role: api
+    workingDirectory: api
+    nodeVersion: 22.18.0
+    packageManager: pnpm
+    buildScript: build
+    startScript: start
+    portEnvironmentVariable: PORT
+    healthCheck:
+      type: http
+      path: /health
+  ssr:
+    type: pm2
+    role: ssr
+    workingDirectory: web
+    nodeVersion: 22.18.0
+    packageManager: yarn
+    buildScript: build
+    startScript: start
+    portEnvironmentVariable: PORT
+    healthCheck:
+      type: http
+      path: /health
+  worker:
+    type: pm2
+    role: worker
+    workingDirectory: worker
+    nodeVersion: 22.18.0
+    packageManager: bun
+    startScript: start
+    healthCheck:
+      type: command
+      command: [bun, run, health]
+frontend:
+  type: service
+  service: ssr
+routes:
+  - hostname: "@primary"
+    path: /api/
+    match: prefix
+    target: api
+    preservePrefix: true
+    sse: true
+database:
+  type: compose
+  service: postgres
+  internalPort: 5432
+  consumers: [api, ssr, worker]
+  volume: postgres-data
+  credentials:
+    username: app
+    database: app
+    passwordSecret: POSTGRES_PASSWORD
+    connectionStringSecret: DATABASE_URL
+    connectionStringTemplate: postgresql://{username}:{password}@{host}:{port}/{database}
+  migrations:
+    service: api
+    command: [pnpm, run, migrate]
+  seed:
+    service: api
+    command: [pnpm, run, seed]
+secrets:
+  required: [CERTBOT_EMAIL]
+  generated: [POSTGRES_PASSWORD, DATABASE_URL]
+targets:
+  production:
+    runnerLabel: fixture-vps
+    primaryDomain: pm2.example.test
+    environment: fixture-production

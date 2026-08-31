@@ -1,0 +1,65 @@
+apiVersion: deploykit/v1alpha1
+metadata:
+  name: static-compose
+  requiredVersion: 0.1.0
+compose:
+  files: [compose.yaml]
+services:
+  api:
+    type: compose
+    service: api
+    internalPort: 3000
+    healthCheck:
+      type: http
+      path: /health
+frontend:
+  type: static
+  workingDirectory: frontend
+  nodeVersion: 22.18.0
+  packageManager: npm
+  buildScript: build
+  outputDirectory: dist
+  spaFallback: true
+  apiBasePath: /api
+  publicEnvironment:
+    VITE_API_BASE_URL: /api
+routes:
+  - hostname: "@primary"
+    path: /api/upload
+    match: exact
+    target: api
+    preservePrefix: true
+    requestBuffering: false
+    uploadLimit: 25m
+  - hostname: "@primary"
+    path: /api/
+    match: prefix
+    target: api
+    preservePrefix: true
+    websocket: true
+database:
+  type: compose
+  service: postgres
+  internalPort: 5432
+  consumers: [api]
+  volume: postgres-data
+  credentials:
+    username: app
+    database: app
+    passwordSecret: POSTGRES_PASSWORD
+    connectionStringSecret: DATABASE_URL
+    connectionStringTemplate: postgresql://{username}:{password}@{host}:{port}/{database}
+  migrations:
+    service: api
+    command: [npm, run, migrate]
+secrets:
+  required: [CERTBOT_EMAIL]
+  generated: [POSTGRES_PASSWORD, DATABASE_URL]
+targets:
+  production:
+    runnerLabel: fixture-vps
+    primaryDomain: static.example.test
+    aliases: [www.static.example.test]
+    environment: fixture-production
+    publicOverrides:
+      VITE_API_BASE_URL: /api

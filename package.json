@@ -1,0 +1,73 @@
+{
+  "name": "@project/deploykit",
+  "version": "0.1.0",
+  "description": "Deterministic, manifest-driven deployments to Ubuntu VPS hosts",
+  "type": "module",
+  "bin": {
+    "deploykit": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "assets",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "LICENSE",
+    "npm-shrinkwrap.json"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "release:pack": "npm run check && node scripts/package-release.mjs",
+    "prepublishOnly": "npm run check"
+  },
+  "keywords": [
+    "deployment",
+    "docker-compose",
+    "nginx",
+    "pm2",
+    "vps",
+    "github-actions"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.65.0",
+    "@octokit/rest": "22.0.1",
+    "commander": "14.0.3",
+    "execa": "9.6.1",
+    "openai": "6.49.0",
+    "prompts": "2.4.2",
+    "semver": "7.7.2",
+    "yaml": "2.9.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/node": "24.13.3",
+    "@types/prompts": "2.4.9",
+    "@types/semver": "7.7.1",
+    "esbuild": "0.28.2",
+    "eslint": "9.39.5",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.68.0",
+    "vitest": "3.2.7"
+  }
+}

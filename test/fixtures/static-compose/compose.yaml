@@ -1,0 +1,16 @@
+services:
+  api:
+    build: ./api
+    expose: ["3000"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set by DeployKit}
+  postgres:
+    image: postgres:16.8
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set by DeployKit}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+volumes:
+  postgres-data:

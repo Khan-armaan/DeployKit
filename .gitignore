@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.deploykit/
+*.log
+*.tgz
+*.tgz.sha256
+.env
+.env.*
+!.env.example
+.DS_Store

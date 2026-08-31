@@ -1,0 +1,10 @@
+services:
+  api:
+    build: ./api
+    expose: ["4000"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set by DeployKit}
+      DATABASE_CA: ${DATABASE_CA:?set by DeployKit}
+  web:
+    build: ./web
+    expose: ["8080"]

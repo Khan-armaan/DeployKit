@@ -1,0 +1,9 @@
+{
+  "name": "fixture-pm2-worker",
+  "private": true,
+  "packageManager": "bun@1.2.5",
+  "scripts": {
+    "start": "bun worker.ts",
+    "health": "bun health.ts"
+  }
+}

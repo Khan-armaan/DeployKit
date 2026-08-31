@@ -1,0 +1,8 @@
+{
+  "name": "fixture-api",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrate.js"
+  }
+}

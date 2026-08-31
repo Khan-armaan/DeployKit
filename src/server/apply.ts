@@ -1,0 +1,366 @@
+import type { ProjectManifest } from "../manifest.js";
+import { ServerError, isServerError } from "./errors.js";
+import { DeploymentEventLogger } from "./events.js";
+import { assertCommitSha, makeServiceKey, makeTargetId } from "./ids.js";
+import type { LockProvider } from "./lock.js";
+import { DEFAULT_SERVER_ROOTS, serverPaths, type ServerPaths, type ServerRoots } from "./paths.js";
+import type { PortRequest, RegistryStore, ReservedResources } from "./registry.js";
+import type { SecretRedactor } from "./secrets.js";
+import { DEPLOYMENT_PHASES, DeploymentStateStore, type ServerDeploymentPhase, type DeploymentState } from "./state.js";
+import { verifyDirectDns, type DnsResolver, type DnsVerificationResult } from "./dns.js";
+
+export interface DeploymentAction {
+  readonly phase: ServerDeploymentPhase;
+  readonly kind: "check" | "directory" | "file" | "command" | "service" | "certificate" | "activation";
+  readonly description: string;
+  readonly command?: string;
+  readonly args?: readonly string[];
+  readonly path?: string;
+}
+
+export interface ServerDeploymentPlan {
+  readonly targetId: string;
+  readonly targetName: string;
+  readonly commitSha: string;
+  readonly domains: readonly string[];
+  readonly portRequests: readonly PortRequest[];
+  readonly paths: ServerPaths;
+  readonly actions: readonly DeploymentAction[];
+}
+
+function installArgv(packageManager: "npm" | "pnpm" | "yarn" | "bun", explicit?: readonly string[]): readonly string[] {
+  if (explicit !== undefined) return explicit;
+  switch (packageManager) {
+    case "npm": return ["npm", "ci"];
+    case "pnpm": return ["pnpm", "install", "--frozen-lockfile"];
+    case "yarn": return ["yarn", "install", "--immutable"];
+    case "bun": return ["bun", "install", "--frozen-lockfile"];
+  }
+}
+
+function scriptArgv(packageManager: "npm" | "pnpm" | "yarn" | "bun", script: string): readonly string[] {
+  return packageManager === "npm" ? ["npm", "run", script] : [packageManager, "run", script];
+}
+
+function commandAction(
+  phase: ServerDeploymentPhase,
+  description: string,
+  argv: readonly string[],
+): DeploymentAction {
+  const [command, ...args] = argv;
+  if (command === undefined) throw new ServerError("SERVER_STATE_INVALID", `${description} has an empty command`);
+  return { phase, kind: "command", description, command, args };
+}
+
+export function planDeployment(
+  manifest: ProjectManifest,
+  targetName: string,
+  commitSha: string,
+  roots: ServerRoots = DEFAULT_SERVER_ROOTS,
+): ServerDeploymentPlan {
+  const target = manifest.targets[targetName];
+  if (target === undefined) {
+    throw new ServerError("SERVER_STATE_INVALID", `manifest does not define target ${targetName}`, {
+      targetName,
+      availableTargets: Object.keys(manifest.targets),
+    });
+  }
+  const sha = assertCommitSha(commitSha);
+  const targetId = makeTargetId(manifest.metadata.name, targetName);
+  const paths = serverPaths(targetId, roots);
+  const targetDomains = new Set([target.primaryDomain, ...target.aliases]);
+  const applicableRoutes = manifest.routes.filter(
+    (route) => route.hostname === "@primary" || targetDomains.has(route.hostname),
+  );
+  const routeTargets = new Set(applicableRoutes.map((route) => route.target));
+  if (manifest.frontend?.type === "service") routeTargets.add(manifest.frontend.service);
+  const domains = [target.primaryDomain, ...target.aliases];
+  const uniqueDomains = [...new Set(domains)];
+  const portRequests: PortRequest[] = [];
+  for (const [name, service] of Object.entries(manifest.services)) {
+    const needsLoopback = routeTargets.has(name) ||
+      (service.type === "compose" && service.hostPort !== undefined) ||
+      (service.type === "pm2" && service.role !== "worker");
+    if (!needsLoopback) continue;
+    portRequests.push({
+      targetId,
+      service: name,
+      serviceKey: makeServiceKey(targetId, name),
+      requestedPort: service.type === "compose" ? service.hostPort : undefined,
+    });
+  }
+  const composeDatabaseNeedsLoopback = manifest.database?.type === "compose" &&
+    manifest.database.consumers.some((consumer) => manifest.services[consumer]?.type === "pm2");
+  if (manifest.database?.type === "compose" && composeDatabaseNeedsLoopback) {
+    const service = "database:compose";
+    portRequests.push({
+      targetId,
+      service,
+      serviceKey: makeServiceKey(targetId, service),
+    });
+  }
+
+  const actions: DeploymentAction[] = [
+    { phase: "manifest-validated", kind: "check", description: "Validate the versioned manifest and effective Compose contract" },
+    ...uniqueDomains.map<DeploymentAction>((domain) => ({
+      phase: "dns-verified",
+      kind: "check",
+      description: `Verify direct A/AAAA records for ${domain}`,
+    })),
+    {
+      phase: "resources-reserved",
+      kind: "file",
+      description: "Reserve domains and stable loopback ports under the server-wide lock",
+      path: paths.registryFile,
+    },
+    {
+      phase: "source-staged",
+      kind: "directory",
+      description: `Atomically stage immutable release ${sha}`,
+      path: paths.releaseDirectory(sha),
+    },
+  ];
+
+  if (manifest.compose !== undefined) {
+    actions.push(
+      {
+        phase: "workloads-ready",
+        kind: "file",
+        description: "Generate a DeployKit-owned Compose override with loopback-only published ports",
+        path: `${paths.releaseDirectory(sha)}/.deploykit/compose.override.yaml`,
+      },
+      commandAction(
+        "workloads-ready",
+        "Build and start Compose workloads",
+        [
+          "docker", "compose",
+          ...manifest.compose.files.flatMap((file) => ["--file", file]),
+          "--file", ".deploykit/compose.override.yaml",
+          "--project-name", targetId,
+          "up", "--detach", "--build",
+        ],
+      ),
+    );
+  }
+
+  for (const [name, service] of Object.entries(manifest.services)) {
+    if (service.type !== "pm2") continue;
+    actions.push({
+      phase: "workloads-ready",
+      kind: "service",
+      description: `Run PM2 workload ${name} as the per-application Unix user using Node ${service.nodeVersion}`,
+    });
+    actions.push(commandAction("workloads-ready", `Install dependencies for ${name}`, installArgv(service.packageManager, service.installCommand)));
+    if (service.buildScript !== undefined) {
+      actions.push(commandAction("workloads-ready", `Build ${name}`, scriptArgv(service.packageManager, service.buildScript)));
+    }
+    actions.push(commandAction("workloads-ready", `Start ${name}`, scriptArgv(service.packageManager, service.startScript)));
+  }
+
+  if (manifest.frontend?.type === "static") {
+    actions.push(
+      commandAction(
+        "workloads-ready",
+        "Install static frontend dependencies",
+        installArgv(manifest.frontend.packageManager, manifest.frontend.installCommand),
+      ),
+      commandAction(
+        "workloads-ready",
+        "Build static frontend",
+        scriptArgv(manifest.frontend.packageManager, manifest.frontend.buildScript),
+      ),
+    );
+  }
+
+  if (manifest.database?.type === "compose" && manifest.database.migrations !== undefined) {
+    actions.push(commandAction("migrations-complete", "Run database migrations", manifest.database.migrations.command));
+  }
+  if (manifest.database?.type === "compose" && manifest.database.seed !== undefined) {
+    actions.push(commandAction("migrations-complete", "Run database seed hook", manifest.database.seed.command));
+  }
+  for (const [name, service] of Object.entries(manifest.services)) {
+    actions.push({
+      phase: "health-verified",
+      kind: "check",
+      description: `Wait for ${name} ${service.healthCheck.type} health check`,
+    });
+  }
+  actions.push(
+    {
+      phase: "proxy-staged",
+      kind: "file",
+      description: "Atomically stage managed Nginx configuration and validate with nginx -t",
+      path: paths.nginxAvailableFile,
+    },
+    commandAction("proxy-staged", "Validate Nginx configuration", ["nginx", "-t"]),
+    {
+      phase: "tls-issued",
+      kind: "certificate",
+      description: "Issue certificates with Certbot webroot without allowing Certbot to edit Nginx",
+    } as DeploymentAction,
+    commandAction("tls-issued", "Issue or reconcile the TLS certificate", [
+      "certbot", "--config", "/dev/stdin", "certonly", "--webroot", "--webroot-path", paths.acmeWebroot,
+      "--non-interactive", "--agree-tos", "--keep-until-expiring",
+      "--cert-name", target.primaryDomain,
+      ...uniqueDomains.flatMap((domain) => ["--domain", domain]),
+    ]),
+    {
+      phase: "activated",
+      kind: "activation",
+      description: "Activate the release and reload Nginx after successful validation",
+      path: paths.currentReleaseLink,
+    },
+    commandAction("activated", "Reload Nginx", ["systemctl", "reload", "nginx"]),
+  );
+
+  return { targetId, targetName, commitSha: sha, domains: uniqueDomains, portRequests, paths, actions };
+}
+
+export interface ApplyContext {
+  readonly manifest: ProjectManifest;
+  readonly plan: ServerDeploymentPlan;
+  readonly sourceDirectory: string;
+  readonly resources: ReservedResources;
+  readonly dns: readonly DnsVerificationResult[];
+}
+
+/** Every mutating phase is explicit so a production driver cannot silently skip one. */
+export interface DeploymentDriver {
+  stageSource(context: ApplyContext): Promise<void>;
+  startWorkloads(context: ApplyContext): Promise<void>;
+  runMigrations(context: ApplyContext): Promise<void>;
+  verifyHealth(context: ApplyContext): Promise<void>;
+  stageProxy(context: ApplyContext): Promise<void>;
+  issueTls(context: ApplyContext): Promise<void>;
+  activate(context: ApplyContext): Promise<void>;
+  disableNewProxyAfterFailure(context: ApplyContext): Promise<void>;
+}
+
+export interface DeploymentApplierOptions {
+  readonly manifest: ProjectManifest;
+  readonly targetName: string;
+  readonly commitSha: string;
+  readonly sourceDirectory: string;
+  readonly serverAddresses: readonly string[];
+  readonly roots?: ServerRoots;
+  readonly lock: LockProvider;
+  readonly registry: RegistryStore;
+  readonly dnsResolver: DnsResolver;
+  readonly driver: DeploymentDriver;
+  readonly redactor: SecretRedactor;
+  readonly now?: () => Date;
+}
+
+export interface DeploymentApplyResult {
+  readonly plan: ServerDeploymentPlan;
+  readonly state: DeploymentState;
+  readonly resumed: boolean;
+  readonly resources: ReservedResources;
+  readonly dns: readonly DnsVerificationResult[];
+}
+
+export class DeploymentApplier {
+  constructor(private readonly options: DeploymentApplierOptions) {}
+
+  async apply(): Promise<DeploymentApplyResult> {
+    const plan = planDeployment(
+      this.options.manifest,
+      this.options.targetName,
+      this.options.commitSha,
+      this.options.roots,
+    );
+    const stateStore = new DeploymentStateStore({
+      file: plan.paths.deploymentStateFile,
+      lockFile: plan.paths.deploymentStateLockFile,
+      targetId: plan.targetId,
+      lock: this.options.lock,
+      now: this.options.now,
+    });
+    const events = new DeploymentEventLogger(
+      plan.paths.deploymentLogFile,
+      plan.targetId,
+      this.options.redactor,
+      this.options.now,
+    );
+
+    return await this.options.lock.withLock(plan.paths.deploymentLockFile, async () => {
+      const begun = await stateStore.begin(plan.commitSha);
+      await events.write("info", "SERVER_DEPLOYMENT_STARTED", "starting", begun.resumed
+        ? `Resuming deployment attempt ${begun.state.attempt}`
+        : "Starting first deployment");
+      let currentPhase: ServerDeploymentPhase | "starting" = "starting";
+      let context: ApplyContext | undefined;
+      try {
+        currentPhase = "manifest-validated";
+        await events.write("info", "SERVER_PHASE_STARTED", currentPhase, "Validating deployment manifest");
+        await stateStore.checkpoint(currentPhase);
+        await events.write("info", "SERVER_PHASE_COMPLETED", currentPhase, "Manifest validation checkpoint complete");
+
+        currentPhase = "dns-verified";
+        await events.write("info", "SERVER_PHASE_STARTED", currentPhase, "Verifying direct DNS records");
+        const dns = await verifyDirectDns(plan.domains, this.options.serverAddresses, this.options.dnsResolver);
+        await stateStore.checkpoint(currentPhase);
+        await events.write("info", "SERVER_PHASE_COMPLETED", currentPhase, "DNS verification checkpoint complete");
+
+        currentPhase = "resources-reserved";
+        await events.write("info", "SERVER_PHASE_STARTED", currentPhase, "Reserving shared domains and loopback ports");
+        const resources = await this.options.registry.reserve({
+          targetId: plan.targetId,
+          domains: plan.domains,
+          ports: plan.portRequests,
+        });
+        await stateStore.checkpoint(currentPhase);
+        await events.write("info", "SERVER_PHASE_COMPLETED", currentPhase, "Resource reservation checkpoint complete");
+        context = {
+          manifest: this.options.manifest,
+          plan,
+          sourceDirectory: this.options.sourceDirectory,
+          resources,
+          dns,
+        };
+
+        const phases: readonly [ServerDeploymentPhase, (value: ApplyContext) => Promise<void>][] = [
+          ["source-staged", (value) => this.options.driver.stageSource(value)],
+          ["workloads-ready", (value) => this.options.driver.startWorkloads(value)],
+          ["migrations-complete", (value) => this.options.driver.runMigrations(value)],
+          ["health-verified", (value) => this.options.driver.verifyHealth(value)],
+          ["proxy-staged", (value) => this.options.driver.stageProxy(value)],
+          ["tls-issued", (value) => this.options.driver.issueTls(value)],
+          ["activated", (value) => this.options.driver.activate(value)],
+        ];
+        const completed = new Set(begun.state.checkpoints.map((checkpoint) => checkpoint.phase));
+        for (const [phase, operation] of phases) {
+          currentPhase = phase;
+          if (completed.has(phase)) {
+            await events.write("info", "SERVER_PHASE_SKIPPED", phase, "Using durable checkpoint from an earlier attempt");
+          } else {
+            await events.write("info", "SERVER_PHASE_STARTED", phase, `Starting ${phase}`);
+            await operation(context);
+          }
+          await stateStore.checkpoint(phase);
+          await events.write("info", "SERVER_PHASE_COMPLETED", phase, `Completed ${phase}`);
+        }
+        const state = await stateStore.succeed();
+        await events.write("info", "SERVER_DEPLOYMENT_SUCCEEDED", "complete", "First deployment completed successfully");
+        return { plan, state, resumed: begun.resumed, resources, dns };
+      } catch (error) {
+        if (context !== undefined) {
+          await this.options.driver.disableNewProxyAfterFailure(context).catch(() => undefined);
+        }
+        const code = isServerError(error) ? error.code : "SERVER_APPLY_FAILED";
+        const unredacted = error instanceof Error ? error.message : String(error);
+        const message = this.options.redactor.redactText(unredacted);
+        await stateStore.fail(currentPhase, code, message).catch(() => undefined);
+        await events.write("error", "SERVER_DEPLOYMENT_FAILED", currentPhase, message, { errorCode: code }).catch(() => undefined);
+        if (isServerError(error)) {
+          throw new ServerError(error.code, message, this.options.redactor.redact(error.details));
+        }
+        throw new ServerError("SERVER_APPLY_FAILED", message);
+      }
+    });
+  }
+}
+
+export function phasesAfter(state: DeploymentState): readonly ServerDeploymentPhase[] {
+  return DEPLOYMENT_PHASES.slice(state.checkpoints.length);
+}

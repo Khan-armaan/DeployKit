@@ -1,0 +1,43 @@
+apiVersion: deploykit/v1alpha1
+metadata:
+  name: container-external
+  requiredVersion: 0.1.0
+compose:
+  files: [compose.yaml]
+services:
+  api:
+    type: compose
+    service: api
+    internalPort: 4000
+    healthCheck:
+      type: http
+      path: /health
+  web:
+    type: compose
+    service: web
+    internalPort: 8080
+    healthCheck:
+      type: http
+      path: /
+frontend:
+  type: service
+  service: web
+routes:
+  - hostname: "@primary"
+    path: /api/
+    match: prefix
+    target: api
+    preservePrefix: true
+database:
+  type: external
+  connectionStringSecret: DATABASE_URL
+  tlsCaSecret: DATABASE_CA
+  requireTls: true
+secrets:
+  required: [CERTBOT_EMAIL, DATABASE_URL, DATABASE_CA]
+  generated: []
+targets:
+  production:
+    runnerLabel: fixture-vps
+    primaryDomain: container.example.test
+    environment: fixture-production

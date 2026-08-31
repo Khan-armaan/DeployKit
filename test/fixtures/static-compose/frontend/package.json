@@ -1,0 +1,10 @@
+{
+  "name": "fixture-static-frontend",
+  "private": true,
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "vite": "6.1.0"
+  }
+}

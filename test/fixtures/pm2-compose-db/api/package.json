@@ -1,0 +1,11 @@
+{
+  "name": "fixture-pm2-api",
+  "private": true,
+  "packageManager": "pnpm@10.6.2",
+  "scripts": {
+    "build": "node build.js",
+    "start": "node server.js",
+    "migrate": "node migrate.js",
+    "seed": "node seed.js"
+  }
+}
