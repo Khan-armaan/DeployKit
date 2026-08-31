@@ -1,7 +1,15 @@
 {
-  "name": "@project/deploykit",
+  "name": "deploykit",
   "version": "0.1.0",
   "description": "Deterministic, manifest-driven deployments to Ubuntu VPS hosts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Khan-armaan/DeployKit.git"
+  },
+  "homepage": "https://github.com/Khan-armaan/DeployKit#readme",
+  "bugs": {
+    "url": "https://github.com/Khan-armaan/DeployKit/issues"
+  },
   "type": "module",
   "bin": {
     "deploykit": "dist/cli.js"

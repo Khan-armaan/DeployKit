@@ -1,6 +1,6 @@
 # DeployKit
 
-`@project/deploykit` is a manifest-driven CLI for first-time deployments to shared Ubuntu VPS hosts. It combines a guided local setup flow with a deterministic server runtime executed by a repository-scoped GitHub Actions runner.
+`deploykit` is a manifest-driven CLI for first-time deployments to shared Ubuntu VPS hosts. It combines a guided local setup flow with a deterministic server runtime executed by a repository-scoped GitHub Actions runner.
 
 DeployKit does not put an LLM in the production control path. The optional advisor can propose a manifest locally; schema validation and the server runtime remain deterministic.
 
@@ -18,11 +18,9 @@ DeployKit does not put an LLM in the production control path. The optional advis
 ## Install
 
 ```bash
-npm install --global @project/deploykit
+npm install --global deploykit
 deploykit --help
 ```
-
-The `@project` npm scope must exist and the package must be published with public access.
 
 ## Quick start
 
