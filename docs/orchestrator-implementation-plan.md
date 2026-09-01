@@ -183,6 +183,12 @@ Completion gate:
 - Dry-run performs zero mutations.
 - The current user-visible CLI remains unchanged.
 
+Delivered by: `src/orchestrator/deploy.ts` (the state machine, the local operation record, and `--dry-run`/`--no-wait` semantics), `src/orchestrator/planner.ts` (the desired state each externally reconciled resource is compared against, plus managed resource names, the gateway binding identity digest, and the ownership marker), `canonicalJson` in `src/orchestrator/canonical.ts`, `test/helpers/orchestrator-fakes.ts`, and `test/orchestrator-deploy.test.ts`.
+
+The state machine treats the local operation record as a hint and GitHub and the VPS as the truth. Every step inspects the real resource, reconciles only when the inspection says it must, and re-reads control artifacts, the frozen SHA, the gateway binding, the repository key, and the Environment immediately before the one irreversible action. A dispatch is skipped whenever the GitHub boundary can correlate an existing run for the same deployment identity — request UUID *or* (target, commit SHA, manifest digest) — so deleting or corrupting the record costs nothing and a rerun cannot produce a second run. A record whose identity, shape, or target does not match is discarded with a `DK_OPERATION_STATE_INVALID` warning rather than trusted, and a recorded failure is retried under a fresh request UUID.
+
+Three inputs later phases own are injected rather than invented here, so no placeholder ships: `renderWorkflow` (Phase 10 owns `.github/workflows/deploykit.yml`), `runtimeBundle` (Phase 8 owns the checksum-verified standalone bundle), and `gatewayAccess` (Phases 8 and 11 own gateway host facts and the gateway Environment secret). `src/orchestrator/` remains unexported from `src/index.ts`, and bare `deploykit deploy` still stops at `DK_UNSUPPORTED` after compiling.
+
 ### Phase 5 — Digest-bound server runtime foundation
 
 Depends on: Phase 4 complete.
@@ -458,7 +464,7 @@ Completion gate:
 | 1 | Contracts and fixtures | Complete |
 | 2 | Config scaffolding/loading/schema | Complete |
 | 3 | Compiler and project validation | Complete |
-| 4 | Orchestrator core with fakes | Planned |
+| 4 | Orchestrator core with fakes | Complete |
 | 5 | Server runtime foundation | Planned |
 | 6 | Gateway protocol/server command | Planned |
 | 7 | Exact-SHA source provider | Planned |

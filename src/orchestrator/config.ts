@@ -44,11 +44,15 @@ function scaffolded(location: ConfigLocation): never {
   );
 }
 
-function parseDocument(source: string, configPath: string): unknown {
+/**
+ * Parses the config document. The YAML parser echoes offending source text in
+ * its messages, which may be a credential, so its error never reaches the
+ * operator.
+ */
+export function parseConfigDocument(source: string, configPath: string): unknown {
   try {
     return parseYaml(source, { merge: false, uniqueKeys: true });
   } catch {
-    // The YAML parser echoes offending source text, which may be a secret.
     throw orchestratorError("DK_CONFIG_INVALID", `${DEPLOY_CONFIG_FILE} is not valid YAML`, {
       details: { config: configPath },
     });
@@ -73,7 +77,7 @@ export async function loadOperatorConfig(
   }
 
   const read = await secureReadOperatorConfig(options);
-  const parsed = parseOperatorConfig(parseDocument(read.source, read.configPath));
+  const parsed = parseOperatorConfig(parseConfigDocument(read.source, read.configPath));
 
   // Redact the operator's exact secret values in every later diagnostic.
   registerRedactedValues(Object.values(parsed.environment.backendValues));

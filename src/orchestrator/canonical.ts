@@ -199,3 +199,35 @@ export function manifestDigestMatches(bytes: Uint8Array, claimed: ManifestDigest
   }
   return computeManifestDigest(bytes).value === claimed.value;
 }
+
+/**
+ * Canonical JSON under the same key discipline as the YAML encoding: frozen
+ * contract order first, then ascending code-point order, with no insignificant
+ * whitespace and no trailing newline.
+ *
+ * Phase 4 digests ownership markers and managed-resource sets with it. It is
+ * deliberately the same ordering rule the gateway's JSON Lines frames will use,
+ * so one encoding decision covers both.
+ */
+export function canonicalJson(value: CanonicalValue, order?: readonly string[]): string {
+  return emitJson(value, order, "");
+}
+
+function emitJson(value: unknown, order: readonly string[] | undefined, path: string): string {
+  if (value === undefined) {
+    throw new CanonicalizationError("undefined has no canonical encoding", path === "" ? "<root>" : path);
+  }
+  if (isPlainObject(value)) {
+    const body = orderedKeys(value, order)
+      .map((key) => {
+        const childPath = path === "" ? key : `${path}.${key}`;
+        return `${JSON.stringify(key)}:${emitJson(value[key], undefined, childPath)}`;
+      })
+      .join(",");
+    return `{${body}}`;
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item, index) => emitJson(item, undefined, `${path}[${index}]`)).join(",")}]`;
+  }
+  return scalar(value, path === "" ? "<root>" : path);
+}
