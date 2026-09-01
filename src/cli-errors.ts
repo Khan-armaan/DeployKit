@@ -1,49 +1,25 @@
 import { ZodError } from "zod";
 
-import { DeployKitError, asDeployKitError, type ErrorCode } from "./errors.js";
+import { DeployKitError, asDeployKitError } from "./errors.js";
 import { ManifestFileError } from "./manifest.js";
 import { redact } from "./output.js";
-import { isServerError, type ServerErrorCode } from "./server/errors.js";
+import { isServerError } from "./server/errors.js";
+import { deployKitCodeForServerError, recoveryForServerError } from "./server/failures.js";
 import { ManifestValidationError } from "./validation.js";
-
-function deployKitCodeForServerError(code: ServerErrorCode): ErrorCode {
-  switch (code) {
-    case "SERVER_DEPLOYMENT_EXISTS":
-      return "DK_ALREADY_DEPLOYED";
-    case "SERVER_SECRET_MISSING":
-      return "DK_SECRET_MISSING";
-    case "SERVER_UNSUPPORTED_OS":
-    case "SERVER_UNSUPPORTED_ARCH":
-      return "DK_UNSUPPORTED";
-    case "SERVER_LOCK_TIMEOUT":
-    case "SERVER_LOCK_FAILED":
-    case "SERVER_DEPLOYMENT_IN_PROGRESS":
-    case "SERVER_PORT_COLLISION":
-    case "SERVER_PORT_EXHAUSTED":
-    case "SERVER_DOMAIN_COLLISION":
-      return "DK_CONFLICT";
-    case "SERVER_INVALID_ID":
-    case "SERVER_INVALID_DOMAIN":
-    case "SERVER_STATE_INVALID":
-    case "SERVER_CHECKPOINT_ORDER":
-    case "SERVER_SECRET_INVALID":
-    case "SERVER_DNS_MISMATCH":
-    case "SERVER_DNS_EMPTY":
-      return "DK_PREFLIGHT_FAILED";
-    case "SERVER_DEPLOYMENT_REF_MISMATCH":
-    case "SERVER_HEALTH_TIMEOUT":
-    case "SERVER_COMMAND_FAILED":
-    case "SERVER_APPLY_FAILED":
-      return "DK_DEPLOYMENT_FAILED";
-  }
-}
 
 export function normalizeCliError(error: unknown): DeployKitError {
   if (isServerError(error)) {
     return new DeployKitError(
       deployKitCodeForServerError(error.code),
       error.message,
-      { cause: error, details: { serverCode: error.code, ...error.details } },
+      {
+        cause: error,
+        details: {
+          serverCode: error.code,
+          recovery: recoveryForServerError(error.code),
+          ...error.details,
+        },
+      },
     );
   }
   if (error instanceof ManifestFileError) {

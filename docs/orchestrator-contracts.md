@@ -14,6 +14,8 @@ Phase 4 made the dependency-injected ports real. `src/orchestrator/deploy.ts` dr
 
 The `LocalOperationRecord` is explicitly non-authoritative. An unreadable, malformed, or foreign record is discarded with an operation-state warning and the run continues from GitHub and VPS state; a dispatch is skipped whenever an existing run correlates by request UUID or by deployment identity, so losing the record cannot produce a duplicate run.
 
+Phase 5 made `DeploymentStateIdentity` and `GatewayDeploymentResult` real on the server. `src/server/state.ts` stores version-`2` deployment state whose identity is exactly the frozen triple, and `src/server/inspect.ts` builds the frozen deployment result — outcome, target, commit SHA, manifest digest, phase, domains, allocated ports, health, resume flag, and failure code — paired with the recovery action from the catalog below. `src/server/failures.ts` is the single translation from a `SERVER_*` runtime failure to that catalog, so the same code and the same resume instruction reach an operator through the local CLI and through the future gateway. `test/server-identity.test.ts` proves same-identity retry, different-SHA and different-digest refusal, completed-target refusal, pre-digest state handling, and crash recovery after every durable phase. The gateway protocol frames that will carry the result are still Phase 6's.
+
 A deployment's target id is `sha256(repository + NUL + targetName)` truncated to 32 hex characters. It is derived from identity alone, never from the manifest, so editing the config never moves a target's server state, ports, release directory, or Nginx file.
 
 The authoritative definitions live in:

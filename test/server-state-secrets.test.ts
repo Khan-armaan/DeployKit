@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ServerError } from "../src/server/errors.js";
+import { makeDeploymentIdentity } from "../src/server/identity.js";
 import { InProcessLockProvider } from "../src/server/lock.js";
 import { SecretRedactor, SecretsStore, parseSecretsEnv } from "../src/server/secrets.js";
 import { DEPLOYMENT_PHASES, DeploymentStateStore } from "../src/server/state.js";
@@ -22,31 +23,32 @@ async function temporaryDirectory(prefix: string): Promise<string> {
 }
 
 describe("DeploymentStateStore", () => {
-  it("persists ordered checkpoints, resumes a failed commit, and refuses a second first deployment", async () => {
+  it("persists ordered checkpoints, resumes the same identity, and refuses a second first deployment", async () => {
     const directory = await temporaryDirectory("deploykit-state-");
     let tick = 0;
     const store = new DeploymentStateStore({
       file: join(directory, "deployment.json"),
       lockFile: join(directory, "state.lock"),
       targetId: "sample-prod-a123456789",
+      targetName: "prod",
       lock: new InProcessLockProvider(),
       now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, tick++)),
     });
-    const sha = "a".repeat(40);
+    const identity = makeDeploymentIdentity("sample-prod-a123456789", "a".repeat(40), "b".repeat(64));
 
-    expect(await store.begin(sha)).toMatchObject({ resumed: false, state: { attempt: 1 } });
+    expect(await store.begin(identity)).toMatchObject({ resumed: false, state: { attempt: 1 } });
     await store.checkpoint("manifest-validated");
     await store.checkpoint("dns-verified");
     await expect(store.checkpoint("source-staged"))
       .rejects.toMatchObject({ code: "SERVER_CHECKPOINT_ORDER" } satisfies Partial<ServerError>);
     await store.fail("dns-verified", "TEST_FAILURE", "simulated failure");
 
-    expect(await store.begin(sha)).toMatchObject({ resumed: true, state: { attempt: 2 } });
+    expect(await store.begin(identity)).toMatchObject({ resumed: true, state: { attempt: 2 } });
     for (const phase of DEPLOYMENT_PHASES.slice(2, -1)) await store.checkpoint(phase);
     const succeeded = await store.succeed();
     expect(succeeded.status).toBe("succeeded");
     expect(succeeded.checkpoints.map((checkpoint) => checkpoint.phase)).toEqual(DEPLOYMENT_PHASES);
-    await expect(store.begin(sha))
+    await expect(store.begin(identity))
       .rejects.toMatchObject({ code: "SERVER_DEPLOYMENT_EXISTS" } satisfies Partial<ServerError>);
   });
 });

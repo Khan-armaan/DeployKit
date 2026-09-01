@@ -38,6 +38,12 @@ function validateCommitSha(value: string): void {
   }
 }
 
+function validateManifestDigest(value: string | undefined): void {
+  if (value !== undefined && !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new DeployKitError("DK_USAGE", "--manifest-digest must be a lowercase 64-character SHA-256 digest");
+  }
+}
+
 function integerOption(value: string): number {
   const number = Number(value);
   if (!Number.isInteger(number) || number < 1 || number > 10_000) {
@@ -61,15 +67,20 @@ export function configureServerProgram(): Command {
   server.command("apply")
     .requiredOption("--target <name>")
     .requiredOption("--commit <sha>")
+    .option("--manifest-digest <sha256>", "compiled runtime-manifest digest this deployment is bound to")
+    .option("--target-id <id>", "target identity from the root-owned gateway binding")
     .option("--source <directory>", "checked-out source", process.cwd())
     .option("--resume")
     .option("--dry-run")
-    .action(async (options: { target: string; commit: string; source: string; resume?: boolean; dryRun?: boolean }, command: Command) => {
+    .action(async (options: { target: string; commit: string; manifestDigest?: string; targetId?: string; source: string; resume?: boolean; dryRun?: boolean }, command: Command) => {
       validateCommitSha(options.commit);
+      validateManifestDigest(options.manifestDigest);
       reporter(command).result("DK_SERVER_APPLY", await runServerApply({
         manifestPath: globalOptions(command).manifest,
         target: options.target,
         commit: options.commit,
+        ...(options.manifestDigest === undefined ? {} : { manifestDigest: options.manifestDigest }),
+        ...(options.targetId === undefined ? {} : { targetId: options.targetId }),
         source: options.source,
         resume: Boolean(options.resume),
         dryRun: Boolean(options.dryRun),
@@ -98,9 +109,12 @@ export function configureServerProgram(): Command {
       process.stdout.write(`${JSON.stringify(await store.check())}\n`);
     });
 
-  server.command("target-status").requiredOption("--target-id <id>").action(async (options: { targetId: string }) => {
-    process.stdout.write(`${JSON.stringify(await inspectServerTarget(options.targetId))}\n`);
-  });
+  server.command("target-status")
+    .requiredOption("--target-id <id>")
+    .option("--target-name <name>", "target name to report when no state exists yet")
+    .action(async (options: { targetId: string; targetName?: string }) => {
+      process.stdout.write(`${JSON.stringify(await inspectServerTarget(options.targetId, options.targetName))}\n`);
+    });
   server.command("target-logs")
     .requiredOption("--target-id <id>")
     .option("--tail <lines>", "line count", integerOption, 200)

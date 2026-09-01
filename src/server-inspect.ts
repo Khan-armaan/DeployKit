@@ -1,15 +1,19 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { inspectDeployment, type ServerInspectionResult } from "./server/inspect.js";
 import { serverPaths } from "./server/paths.js";
 
-export async function inspectServerTarget(targetId: string): Promise<unknown> {
-  const paths = serverPaths(targetId);
-  try {
-    return JSON.parse(await readFile(paths.deploymentStateFile, "utf8")) as unknown;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { targetId, status: "not-deployed" };
-    throw error;
-  }
+/**
+ * The structured, redacted answer for one target: identity, phase, domains,
+ * allocated ports, health, failure code, and the recovery action to take. It is
+ * built from durable state alone, so it answers for a target whose manifest is
+ * not present.
+ */
+export async function inspectServerTarget(
+  targetId: string,
+  targetName?: string,
+): Promise<ServerInspectionResult> {
+  return await inspectDeployment({ targetId, ...(targetName === undefined ? {} : { targetName }) });
 }
 
 export async function readServerTargetLogs(targetId: string, tail = 200): Promise<{ targetId: string; lines: string[] }> {

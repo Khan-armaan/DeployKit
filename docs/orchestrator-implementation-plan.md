@@ -213,6 +213,12 @@ Completion gate:
 - Auto ports remain stable across retries and conflicting projects receive different ports without partial registry writes.
 - Existing ordered deployment phases remain unchanged.
 
+Delivered by: `src/server/identity.ts` (the frozen deployment identity and manifest digest, plus mismatch reporting), the rewritten `src/server/state.ts` (version 2 state bound to that identity, pre-digest state handling, and persisted resources and health), `src/server/inspect.ts` (the structured redacted inspection result), `src/server/failures.ts` (the one `SERVER_*` to `DK_*` and recovery translation, now also used by `src/cli-errors.ts`), the identity-bound `DeploymentApplier` and validated incoming project root in `src/server/apply.ts`, `describe` and `portsByService` in `src/server/registry.ts`, and `test/server-identity.test.ts`.
+
+State is version `2` and carries the `deploykit/deployment-identity/v1alpha1` triple, the reserved domains and loopback ports, and the health of each service, so inspection answers for a target whose manifest is not present. `begin` refuses a different SHA or digest before touching anything, refuses every apply after a successful completion, and treats a `running` record as interrupted only when the caller proves it holds the server-wide deployment lock. Pre-digest state is never guessed: a completed legacy target is preserved and still refuses another apply, and failed or running legacy state requires `migrateLegacyState` or a clean target.
+
+Supporting changes to existing modules: `planDeployment` accepts the target id a root-owned gateway binding will supply instead of deriving it from the manifest; `runServerApply` gained optional `--manifest-digest` and `--target-id`, validates the incoming source root before validating the project *against* it, and derives a deterministic digest for a legacy `deploykit.yaml`; `deploykit server target-status` returns the inspection result; and `SERVER_DEPLOYMENT_REF_MISMATCH` was replaced by `SERVER_IDENTITY_MISMATCH`, joined by `SERVER_STATE_LEGACY`, `SERVER_SOURCE_ROOT_INVALID`, and `SERVER_RELEASE_CONFLICT`. The gateway is not installed anywhere; Phase 6 owns the protocol that will call this engine.
+
 ### Phase 6 — Restricted gateway protocol and server command
 
 Depends on: Phase 5 complete.
@@ -465,7 +471,7 @@ Completion gate:
 | 2 | Config scaffolding/loading/schema | Complete |
 | 3 | Compiler and project validation | Complete |
 | 4 | Orchestrator core with fakes | Complete |
-| 5 | Server runtime foundation | Planned |
+| 5 | Server runtime foundation | Complete |
 | 6 | Gateway protocol/server command | Planned |
 | 7 | Exact-SHA source provider | Planned |
 | 8 | VPS bootstrap/key lifecycle | Planned |

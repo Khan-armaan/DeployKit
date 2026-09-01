@@ -2,7 +2,9 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { DeployKitError } from "./errors.js";
-import { loadManifest, requireRunnerLabel } from "./manifest.js";
+import { loadManifest, requireRunnerLabel, type ProjectManifest } from "./manifest.js";
+import { canonicalYaml, computeManifestDigest, type CanonicalValue } from "./orchestrator/canonical.js";
+import { CONTRACT_KEY_ORDER, type ManifestDigest } from "./orchestrator/contracts.js";
 import { validateProject } from "./project-validation.js";
 import {
   DeploymentApplier,
@@ -13,6 +15,8 @@ import {
   ProductionDeploymentDriver,
   RegistryStore,
   SecretsStore,
+  assertIncomingSourceRoot,
+  makeManifestDigest,
   makeTargetId,
   planDeployment,
   secretRequirementsFromManifest,
@@ -44,31 +48,64 @@ export interface ServerApplyOptions {
   source: string;
   resume: boolean;
   dryRun: boolean;
+  /**
+   * Digest of the compiled secret-free runtime manifest. The orchestrated path
+   * supplies it; the legacy manifest path derives it from the same canonical
+   * serialization so state is identity-bound either way.
+   */
+  manifestDigest?: string;
+  /** Target identity from the root-owned gateway binding, when present. */
+  targetId?: string;
+}
+
+/**
+ * A legacy `deploykit.yaml` has no compiled runtime manifest, so its digest is
+ * taken over the same canonical bytes the compiler would produce for the fields
+ * it does declare. It is deterministic and binds state to the exact manifest
+ * that was applied.
+ */
+export function deriveManifestDigest(manifest: ProjectManifest): ManifestDigest {
+  const bytes = Buffer.from(
+    canonicalYaml(
+      JSON.parse(JSON.stringify(manifest)) as CanonicalValue,
+      CONTRACT_KEY_ORDER.runtimeManifest,
+    ),
+    "utf8",
+  );
+  return computeManifestDigest(bytes);
 }
 
 export async function runServerApply(options: ServerApplyOptions): Promise<unknown> {
   process.env.DEPLOYKIT_SERVER_RUNTIME = "1";
   const manifest = await loadManifest(options.manifestPath);
-  const validation = await validateProject(manifest, { manifestPath: options.manifestPath, inspectComposeConfig: true });
-  if (!validation.valid) throw new DeployKitError("DK_VALIDATION_FAILED", "Server-side project validation failed", { details: validation.issues });
   const target = manifest.targets[options.target];
   if (!target) throw new DeployKitError("DK_USAGE", `Unknown target '${options.target}'`);
   if (!versionSatisfiesRequirement(manifest.metadata.requiredVersion, VERSION)) {
     throw new DeployKitError("DK_PREFLIGHT_FAILED", `Manifest requires DeployKit ${manifest.metadata.requiredVersion}, but server has ${VERSION}`);
   }
   const serverConfig = await loadServerConfig(requireRunnerLabel(target, options.target));
-  const plan = planDeployment(manifest, options.target, options.commit);
-  if (options.dryRun) return plan;
+  const plan = planDeployment(manifest, options.target, options.commit, undefined, { targetId: options.targetId });
+  const manifestDigest = options.manifestDigest === undefined
+    ? deriveManifestDigest(manifest)
+    : makeManifestDigest(options.manifestDigest);
+  // The incoming project root is validated before it is validated *against*:
+  // every filesystem, package-script, and Compose check runs on the tree the
+  // caller retrieved, not on wherever the manifest happens to live.
+  const sourceDirectory = await assertIncomingSourceRoot(resolve(options.source), plan.paths);
+  const validation = await validateProject(manifest, { sourceRoot: sourceDirectory, inspectComposeConfig: true });
+  if (!validation.valid) throw new DeployKitError("DK_VALIDATION_FAILED", "Server-side project validation failed", { details: validation.issues });
+  if (options.dryRun) return { ...plan, manifestDigest, sourceDirectory };
   if (typeof process.getuid === "function" && process.getuid() !== 0) {
     throw new DeployKitError("DK_PREFLIGHT_FAILED", "deploykit server apply must run as root");
   }
 
   const lock = new FlockLockProvider();
-  const paths = serverPaths(makeTargetId(manifest.metadata.name, options.target));
+  const paths = serverPaths(options.targetId ?? makeTargetId(manifest.metadata.name, options.target));
   const stateStore = new DeploymentStateStore({
     file: paths.deploymentStateFile,
     lockFile: paths.deploymentStateLockFile,
     targetId: paths.targetId,
+    targetName: options.target,
     lock,
   });
   const existing = await stateStore.read();
@@ -94,7 +131,9 @@ export async function runServerApply(options: ServerApplyOptions): Promise<unkno
     manifest,
     targetName: options.target,
     commitSha: options.commit,
-    sourceDirectory: resolve(options.source),
+    manifestDigest,
+    ...(options.targetId === undefined ? {} : { targetId: options.targetId }),
+    sourceDirectory,
     serverAddresses: serverConfig.publicAddresses,
     lock,
     registry,

@@ -107,15 +107,17 @@ function roots(directory: string): ServerRoots {
 
 function resourcesFor(contextPlan: ReturnType<typeof planDeployment>): ReservedResources {
   let nextPort = 34_000;
+  const ports = contextPlan.portRequests.map((request) => ({
+    serviceKey: request.serviceKey,
+    targetId: request.targetId,
+    service: request.service,
+    address: "127.0.0.1" as const,
+    port: nextPort++,
+  }));
   return {
     domains: contextPlan.domains.map((domain) => ({ domain, targetId: contextPlan.targetId })),
-    ports: contextPlan.portRequests.map((request) => ({
-      serviceKey: request.serviceKey,
-      targetId: request.targetId,
-      service: request.service,
-      address: "127.0.0.1",
-      port: nextPort++,
-    })),
+    ports,
+    portsByService: Object.fromEntries(ports.map((reservation) => [reservation.service, reservation.port])),
   };
 }
 

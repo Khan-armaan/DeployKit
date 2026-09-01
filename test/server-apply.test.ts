@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,6 +49,7 @@ describe("DeploymentApplier", () => {
   it("resumes after the last durable checkpoint and then refuses redeployment", async () => {
     const directory = await mkdtemp(join(tmpdir(), "deploykit-apply-"));
     temporaryDirectories.push(directory);
+    await mkdir(join(directory, "source"), { recursive: true });
     const roots = {
       config: join(directory, "etc"),
       state: join(directory, "state"),
@@ -91,7 +92,8 @@ describe("DeploymentApplier", () => {
       manifest,
       targetName: "prod",
       commitSha: "a".repeat(40),
-      sourceDirectory: directory,
+      manifestDigest: "b".repeat(64),
+      sourceDirectory: join(directory, "source"),
       serverAddresses: ["203.0.113.10"],
       roots,
       lock,

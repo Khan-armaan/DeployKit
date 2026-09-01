@@ -101,9 +101,9 @@ export function deploymentUnixUser(targetId: string): string {
 }
 
 function portsByService(context: ApplyContext): Record<string, number> {
-  const result: Record<string, number> = {};
-  for (const reservation of context.resources.ports) result[reservation.service] = reservation.port;
-  return result;
+  // The registry already publishes the stable allocation for every service, so
+  // a retry that reuses reservations cannot drift from what was reserved.
+  return { ...context.resources.portsByService };
 }
 
 function composePrefix(context: ApplyContext): string[] {

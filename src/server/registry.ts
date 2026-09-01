@@ -1,6 +1,7 @@
 import { createServer } from "node:net";
 import { domainToASCII } from "node:url";
 
+import type { AllocatedPortResult } from "../orchestrator/contracts.js";
 import { atomicWriteJson, readJsonFile } from "./atomic.js";
 import { ServerError } from "./errors.js";
 import type { LockProvider } from "./lock.js";
@@ -72,6 +73,40 @@ export interface ReserveResourcesRequest {
 export interface ReservedResources {
   readonly domains: readonly DomainReservation[];
   readonly ports: readonly PortReservation[];
+  /**
+   * The same allocations keyed by service name. Generators and the redacted
+   * inspection result read this instead of rebuilding the mapping, so a retry
+   * that reuses an existing reservation cannot drift from what was reserved.
+   */
+  readonly portsByService: Readonly<Record<string, number>>;
+}
+
+/** The secret-free port shape reported by deployment state and inspection. */
+export function allocatedPortResults(
+  ports: readonly PortReservation[],
+): readonly AllocatedPortResult[] {
+  return [...ports]
+    .sort((left, right) => left.service.localeCompare(right.service))
+    .map((reservation) => ({
+      service: reservation.service,
+      address: reservation.address,
+      port: reservation.port,
+    }));
+}
+
+function describeReservations(
+  domains: readonly DomainReservation[],
+  ports: readonly PortReservation[],
+): ReservedResources {
+  const sortedDomains = [...domains].sort((left, right) => left.domain.localeCompare(right.domain));
+  const sortedPorts = [...ports].sort((left, right) => left.service.localeCompare(right.service));
+  return {
+    domains: sortedDomains,
+    ports: sortedPorts,
+    portsByService: Object.freeze(
+      Object.fromEntries(sortedPorts.map((reservation) => [reservation.service, reservation.port])),
+    ),
+  };
 }
 
 const EMPTY_REGISTRY: ServerRegistry = Object.freeze({ version: 1, ports: [], domains: [] });
@@ -235,11 +270,27 @@ export class RegistryStore {
       }
 
       const next: ServerRegistry = { version: 1, ports, domains };
+      // The single write happens only after every domain and port passed its
+      // collision check, so a refusal never leaves a partial reservation.
       await atomicWriteJson(this.file, next, { mode: 0o600 });
-      return {
-        domains: domains.filter((item) => item.targetId === request.targetId),
-        ports: reserved,
-      };
+      return describeReservations(
+        domains.filter((item) => item.targetId === request.targetId),
+        reserved,
+      );
+    });
+  }
+
+  /**
+   * Everything currently reserved for one target. Inspection uses it to report
+   * stable loopback ports without reserving anything.
+   */
+  async describe(targetId: string): Promise<ReservedResources> {
+    return await this.lock.withLock(this.lockFile, async () => {
+      const current = await this.read();
+      return describeReservations(
+        current.domains.filter((item) => item.targetId === targetId),
+        current.ports.filter((item) => item.targetId === targetId),
+      );
     });
   }
 

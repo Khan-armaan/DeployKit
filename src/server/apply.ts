@@ -1,10 +1,20 @@
+import { lstat, realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve } from "node:path";
+
 import type { ProjectManifest } from "../manifest.js";
+import type {
+  DeploymentStateIdentity,
+  HealthResult,
+  ManifestDigest,
+} from "../orchestrator/contracts.js";
 import { ServerError, isServerError } from "./errors.js";
 import { DeploymentEventLogger } from "./events.js";
-import { assertCommitSha, makeServiceKey, makeTargetId } from "./ids.js";
+import { assertCommitSha, assertSafeId, makeServiceKey, makeTargetId } from "./ids.js";
+import { makeDeploymentIdentity } from "./identity.js";
+import { buildInspection, type ServerInspectionResult } from "./inspect.js";
 import type { LockProvider } from "./lock.js";
 import { DEFAULT_SERVER_ROOTS, serverPaths, type ServerPaths, type ServerRoots } from "./paths.js";
-import type { PortRequest, RegistryStore, ReservedResources } from "./registry.js";
+import { allocatedPortResults, type PortRequest, type RegistryStore, type ReservedResources } from "./registry.js";
 import type { SecretRedactor } from "./secrets.js";
 import { DEPLOYMENT_PHASES, DeploymentStateStore, type ServerDeploymentPhase, type DeploymentState } from "./state.js";
 import { verifyDirectDns, type DnsResolver, type DnsVerificationResult } from "./dns.js";
@@ -52,11 +62,21 @@ function commandAction(
   return { phase, kind: "command", description, command, args };
 }
 
+export interface PlanDeploymentOptions {
+  /**
+   * Identity supplied by the root-owned gateway binding. The runtime never lets
+   * caller input choose it; when it is absent the legacy manifest-derived
+   * identifier is used instead.
+   */
+  readonly targetId?: string;
+}
+
 export function planDeployment(
   manifest: ProjectManifest,
   targetName: string,
   commitSha: string,
   roots: ServerRoots = DEFAULT_SERVER_ROOTS,
+  options: PlanDeploymentOptions = {},
 ): ServerDeploymentPlan {
   const target = manifest.targets[targetName];
   if (target === undefined) {
@@ -66,7 +86,9 @@ export function planDeployment(
     });
   }
   const sha = assertCommitSha(commitSha);
-  const targetId = makeTargetId(manifest.metadata.name, targetName);
+  const targetId = options.targetId === undefined
+    ? makeTargetId(manifest.metadata.name, targetName)
+    : assertSafeId(options.targetId, "target id");
   const paths = serverPaths(targetId, roots);
   const targetDomains = new Set([target.primaryDomain, ...target.aliases]);
   const applicableRoutes = manifest.routes.filter(
@@ -240,6 +262,14 @@ export interface DeploymentApplierOptions {
   readonly manifest: ProjectManifest;
   readonly targetName: string;
   readonly commitSha: string;
+  /** Digest of the compiled secret-free runtime manifest this apply deploys. */
+  readonly manifestDigest: ManifestDigest | string;
+  /** Identity from the root-owned gateway binding, when there is one. */
+  readonly targetId?: string;
+  /**
+   * Absolute root of the already-retrieved application source. It is validated
+   * before any phase runs and is never allowed to be a runtime-owned path.
+   */
   readonly sourceDirectory: string;
   readonly serverAddresses: readonly string[];
   readonly roots?: ServerRoots;
@@ -253,10 +283,118 @@ export interface DeploymentApplierOptions {
 
 export interface DeploymentApplyResult {
   readonly plan: ServerDeploymentPlan;
+  readonly identity: DeploymentStateIdentity;
   readonly state: DeploymentState;
   readonly resumed: boolean;
   readonly resources: ReservedResources;
   readonly dns: readonly DnsVerificationResult[];
+  readonly inspection: ServerInspectionResult;
+}
+
+function contains(parent: string, child: string): boolean {
+  const difference = relative(parent, child);
+  return difference === "" || (!difference.startsWith("..") && !isAbsolute(difference));
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/**
+ * Resolves a path that may not exist yet through its closest existing ancestor,
+ * so a runtime-owned directory is compared against the incoming root on the
+ * same footing. Without it a host whose temporary or state root is itself a
+ * symlink would compare a resolved path against an unresolved one and miss an
+ * overlap.
+ */
+async function resolveExistingAncestor(path: string): Promise<string> {
+  const absolute = resolve(path);
+  const segments: string[] = [];
+  let candidate = absolute;
+  for (;;) {
+    try {
+      return resolve(await realpath(candidate), ...segments);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const parent = resolve(candidate, "..");
+    if (parent === candidate) return absolute;
+    segments.unshift(candidate.slice(parent.length + 1));
+    candidate = parent;
+  }
+}
+
+/**
+ * Validates the incoming project root the caller retrieved. The deployment
+ * engine accepts an explicit root so source retrieval can own where the tree
+ * lives, but it refuses any root that overlaps runtime-owned state: the
+ * immutable releases, the activated release link, and the target's
+ * configuration and state directories all belong to DeployKit alone.
+ */
+export async function assertIncomingSourceRoot(
+  sourceDirectory: string,
+  paths: ServerPaths,
+): Promise<string> {
+  if (!isAbsolute(sourceDirectory) || sourceDirectory.includes("\0")) {
+    throw new ServerError(
+      "SERVER_SOURCE_ROOT_INVALID",
+      "the incoming project root must be an absolute path without NUL bytes",
+    );
+  }
+  let root: string;
+  try {
+    root = await realpath(sourceDirectory);
+  } catch (error) {
+    throw new ServerError(
+      "SERVER_SOURCE_ROOT_INVALID",
+      `the incoming project root ${sourceDirectory} does not exist`,
+      { sourceDirectory },
+      { cause: error },
+    );
+  }
+  if (!(await lstat(root)).isDirectory()) {
+    throw new ServerError("SERVER_SOURCE_ROOT_INVALID", `the incoming project root ${root} is not a directory`, {
+      sourceDirectory: root,
+    });
+  }
+  const reserved = await Promise.all([
+    paths.releasesDirectory,
+    paths.currentReleaseLink,
+    paths.targetConfigDirectory,
+    resolve(paths.deploymentStateFile, ".."),
+  ].map((path) => resolveExistingAncestor(path)));
+  for (const path of reserved) {
+    if (contains(path, root) || contains(root, path)) {
+      throw new ServerError(
+        "SERVER_SOURCE_ROOT_INVALID",
+        "the incoming project root overlaps a DeployKit-owned runtime path",
+        { sourceDirectory: root, reservedPath: path },
+      );
+    }
+  }
+  return root;
+}
+
+/**
+ * Health is derived from the manifest once `verifyHealth` returns, because that
+ * phase throws unless every declared check passed. Persisting it keeps
+ * inspection answerable from state alone, without the manifest the deployment
+ * was applied from.
+ */
+function healthResults(manifest: ProjectManifest): readonly HealthResult[] {
+  return Object.entries(manifest.services)
+    .map(([service, definition]) => ({
+      service,
+      healthy: true,
+      check: definition.healthCheck.type,
+    }))
+    .sort((left, right) => left.service.localeCompare(right.service));
 }
 
 export class DeploymentApplier {
@@ -268,11 +406,19 @@ export class DeploymentApplier {
       this.options.targetName,
       this.options.commitSha,
       this.options.roots,
+      { targetId: this.options.targetId },
     );
+    const identity = makeDeploymentIdentity(
+      plan.targetId,
+      plan.commitSha,
+      this.options.manifestDigest,
+    );
+    const sourceDirectory = await assertIncomingSourceRoot(this.options.sourceDirectory, plan.paths);
     const stateStore = new DeploymentStateStore({
       file: plan.paths.deploymentStateFile,
       lockFile: plan.paths.deploymentStateLockFile,
       targetId: plan.targetId,
+      targetName: plan.targetName,
       lock: this.options.lock,
       now: this.options.now,
     });
@@ -282,9 +428,13 @@ export class DeploymentApplier {
       this.options.redactor,
       this.options.now,
     );
+    const releaseDirectory = plan.paths.releaseDirectory(plan.commitSha);
 
     return await this.options.lock.withLock(plan.paths.deploymentLockFile, async () => {
-      const begun = await stateStore.begin(plan.commitSha);
+      // Holding the server-wide deployment lock is what makes a `running`
+      // record provably interrupted rather than live.
+      const begun = await stateStore.begin(identity, { serverDeploymentLockHeld: true });
+      const releaseExistedBeforeApply = await pathExists(releaseDirectory);
       await events.write("info", "SERVER_DEPLOYMENT_STARTED", "starting", begun.resumed
         ? `Resuming deployment attempt ${begun.state.attempt}`
         : "Starting first deployment");
@@ -309,15 +459,30 @@ export class DeploymentApplier {
           domains: plan.domains,
           ports: plan.portRequests,
         });
+        await stateStore.recordResources({
+          domains: resources.domains.map((reservation) => reservation.domain),
+          ports: allocatedPortResults(resources.ports),
+        });
         await stateStore.checkpoint(currentPhase);
         await events.write("info", "SERVER_PHASE_COMPLETED", currentPhase, "Resource reservation checkpoint complete");
         context = {
           manifest: this.options.manifest,
           plan,
-          sourceDirectory: this.options.sourceDirectory,
+          sourceDirectory,
           resources,
           dns,
         };
+
+        // Only stageSource may create the immutable release. A release that
+        // appeared during an earlier phase of this run is a conflict, while one
+        // left by an interrupted attempt is still verified by ReleaseManager.
+        if (!releaseExistedBeforeApply && await pathExists(releaseDirectory)) {
+          throw new ServerError(
+            "SERVER_RELEASE_CONFLICT",
+            `release ${plan.commitSha} was created before the source-staged phase`,
+            { releaseDirectory },
+          );
+        }
 
         const phases: readonly [ServerDeploymentPhase, (value: ApplyContext) => Promise<void>][] = [
           ["source-staged", (value) => this.options.driver.stageSource(value)],
@@ -337,12 +502,28 @@ export class DeploymentApplier {
             await events.write("info", "SERVER_PHASE_STARTED", phase, `Starting ${phase}`);
             await operation(context);
           }
+          if (phase === "health-verified") {
+            await stateStore.recordHealth(healthResults(this.options.manifest));
+          }
           await stateStore.checkpoint(phase);
           await events.write("info", "SERVER_PHASE_COMPLETED", phase, `Completed ${phase}`);
         }
         const state = await stateStore.succeed();
         await events.write("info", "SERVER_DEPLOYMENT_SUCCEEDED", "complete", "First deployment completed successfully");
-        return { plan, state, resumed: begun.resumed, resources, dns };
+        return {
+          plan,
+          identity,
+          state,
+          resumed: begun.resumed,
+          resources,
+          dns,
+          inspection: this.options.redactor.redact(
+            buildInspection(
+              { kind: "current", state },
+              { targetId: plan.targetId, targetName: plan.targetName },
+            ),
+          ),
+        };
       } catch (error) {
         if (context !== undefined) {
           await this.options.driver.disableNewProxyAfterFailure(context).catch(() => undefined);
