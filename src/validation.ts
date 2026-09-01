@@ -242,6 +242,31 @@ function semanticIssues(manifest: DeployKitManifest): ValidationIssue[] {
     }
 
     const isWorker = service.role === "worker";
+    if (service.hostPort !== undefined) {
+      if (isWorker) {
+        issues.push(
+          issue(
+            "PM2_WORKER_HOST_PORT",
+            [...servicePath, "hostPort"],
+            `PM2 worker '${name}' cannot request a host port`,
+            "Remove hostPort; workers are not routed and never bind a port.",
+          ),
+        );
+      }
+      const previousPortOwner = explicitHostPorts.get(service.hostPort);
+      if (previousPortOwner !== undefined) {
+        issues.push(
+          issue(
+            "HOST_PORT_DUPLICATE",
+            [...servicePath, "hostPort"],
+            `Host port ${service.hostPort} is also requested by service '${previousPortOwner}'`,
+            "Remove explicit host ports to let DeployKit allocate stable loopback ports.",
+          ),
+        );
+      } else {
+        explicitHostPorts.set(service.hostPort, name);
+      }
+    }
     if (!isWorker && service.portEnvironmentVariable === undefined) {
       issues.push(
         issue(
@@ -301,9 +326,12 @@ function semanticIssues(manifest: DeployKitManifest): ValidationIssue[] {
     }
   }
 
+  // Gateway-managed targets have no runner label and cannot collide on one.
   const labels = new Map<string, string[]>();
   for (const [targetName, target] of Object.entries(manifest.targets)) {
-    labels.set(target.runnerLabel, [...(labels.get(target.runnerLabel) ?? []), targetName]);
+    const runnerLabel = target.runnerLabel;
+    if (runnerLabel === undefined) continue;
+    labels.set(runnerLabel, [...(labels.get(runnerLabel) ?? []), targetName]);
   }
   if (explicitHostPorts.size > 0) {
     for (const [runnerLabel, targetNames] of labels) {
@@ -462,12 +490,15 @@ function semanticIssues(manifest: DeployKitManifest): ValidationIssue[] {
       );
     }
 
-    if ((route.websocket || route.sse) && route.buffering) {
+    // Only server-sent events need proxy_buffering off: nginx stops buffering a
+    // WebSocket the moment it upgrades the connection, so the directive has no
+    // effect there and the generated site never emits it for websocket alone.
+    if (route.sse && route.buffering) {
       issues.push(
         issue(
           "ROUTE_STREAM_BUFFERING_ENABLED",
           [...routePath, "buffering"],
-          "Streaming routes must disable proxy buffering",
+          "Server-sent-event routes must disable proxy buffering",
           "Set buffering: false.",
         ),
       );

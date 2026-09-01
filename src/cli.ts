@@ -8,12 +8,12 @@ import prompts from "prompts";
 import { OpenAIAdvisorProvider, AnthropicAdvisorProvider, loadApprovedAdvisorFiles, requestManifestAdvice } from "./advisor/index.js";
 import { bootstrapServer, readSshFingerprint } from "./bootstrap.js";
 import { renderCliError } from "./cli-errors.js";
-import { loadOperatorConfig } from "./orchestrator/config.js";
+import { compileRuntimeManifest, loadOperatorConfig } from "./orchestrator/config.js";
 import { DeployKitError } from "./errors.js";
 import { atomicWriteFile, writeIfAbsent } from "./fs.js";
 import { dispatchDeployment, inferGitHubRepository, validateApplicationRef } from "./github.js";
 import { collectInitAnswers, createStarterManifest, type InitAnswers } from "./init.js";
-import { loadManifest, parseManifest, stringifyManifest, type ProjectManifest } from "./manifest.js";
+import { loadManifest, parseManifest, requireRunnerLabel, stringifyManifest, type ProjectManifest } from "./manifest.js";
 import { Reporter } from "./output.js";
 import { createDeploymentPlan } from "./plan.js";
 import { validateProject } from "./project-validation.js";
@@ -390,20 +390,25 @@ export function configureProgram(): Command {
       if (!legacyRequested) {
         const out = reporter(command);
         const loaded = await loadOperatorDeployment(out);
-        // Phases 3-13 own compilation, GitHub setup, the gateway, and dispatch.
-        // Until they land, a valid config is reported and nothing is mutated.
+        // Phase 3 compiles the secret-free runtime manifest and its digest.
+        // Phases 4-13 own GitHub setup, the gateway, and dispatch, so nothing
+        // beyond the local config file is read or mutated here.
+        const compiled = compileRuntimeManifest(loaded);
         out.info("DK_CONFIG_OK", `Validated ${loaded.location.configPath} for target '${loaded.config.target.name}'`, {
           project: loaded.config.project.name,
           repository: loaded.config.project.repository,
           ref: loaded.config.project.ref,
           target: loaded.config.target.name,
+          targetId: compiled.targetId,
           primaryDomain: loaded.config.target.primaryDomain,
           services: Object.keys(loaded.config.services).sort(),
           declaredSecretNames: loaded.environment.declaredSecretNames,
+          manifestDigest: compiled.digest,
+          manifestBytes: compiled.canonicalBytes.byteLength,
         });
         throw new DeployKitError(
           "DK_UNSUPPORTED",
-          "This build validates deploykit.config.yaml, but the one-command deployment orchestrator is not implemented yet. The legacy --target/--ref path remains available only for already initialized v0.1 projects.",
+          "This build validates and compiles deploykit.config.yaml, but the one-command deployment orchestrator is not implemented yet. The legacy --target/--ref path remains available only for already initialized v0.1 projects.",
         );
       }
       if (options.target === undefined || options.ref === undefined) {
@@ -427,7 +432,7 @@ export function configureProgram(): Command {
 
   const inspectRemote = async (kind: "status" | "logs", targetName: string, manifest: ProjectManifest, tail?: number): Promise<unknown> => {
     const target = requireTarget(manifest, targetName);
-    const enrolled = await requireServer(target.runnerLabel);
+    const enrolled = await requireServer(requireRunnerLabel(target, targetName));
     const targetId = makeTargetId(manifest.metadata.name, targetName);
     const result = await runRemoteDeployKit(enrolled.host, ["server", kind === "status" ? "target-status" : "target-logs", "--target-id", targetId, ...(kind === "logs" ? ["--tail", String(tail ?? 200)] : [])], { hostKey: enrolled.hostKey });
     return JSON.parse(result.stdout) as unknown;

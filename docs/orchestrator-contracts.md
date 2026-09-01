@@ -6,6 +6,10 @@ This file records the boundaries that [`orchestrator-implementation-plan.md`](or
 
 Phase 2 made the catalog's first four rows real. The `config-filesystem` and `config-schema` boundaries are now raised by bare `deploykit deploy`, and each failure carries its frozen recovery action and resume instruction in the error details. Every other row below remains a design contract until the phase that owns it lands.
 
+Phase 3 made the compiled runtime manifest, its canonicalization, and its digest real. `src/orchestrator/compile.ts` produces `CompiledRuntimeManifest` values, `src/orchestrator/canonical.ts` serializes them under `deploykit/runtime-yaml-canonical/v1` and digests those exact bytes, and `test/orchestrator-compile.test.ts` asserts that compiling `test/fixtures/static-compose/deploykit.config.fixture.yaml` reproduces the manifest frame in `protocol/valid/apply.jsonl` byte for byte — payload, byte length, and digest. `RuntimeServiceFrontend` additionally carries `publicEnvironment`, because a containerized or server-rendered frontend needs the same public build values a static one does; the field is nested under the frozen `frontend` key and does not change `CONTRACT_KEY_ORDER`.
+
+A deployment's target id is `sha256(repository + NUL + targetName)` truncated to 32 hex characters. It is derived from identity alone, never from the manifest, so editing the config never moves a target's server state, ports, release directory, or Nginx file.
+
 The authoritative definitions live in:
 
 - `src/orchestrator/contracts.ts` — versioned shapes, canonical key order, and protocol limits.

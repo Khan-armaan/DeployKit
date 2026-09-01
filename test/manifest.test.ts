@@ -117,7 +117,7 @@ describe("deployKitManifestSchema", () => {
         connectionStringSecret: "DATABASE_URL",
       },
     });
-    expect(external.frontend).toEqual({ type: "service", service: "api" });
+    expect(external.frontend).toEqual({ type: "service", service: "api", publicEnvironment: {} });
     expect(external.database).toMatchObject({ type: "external", requireTls: true });
   });
 

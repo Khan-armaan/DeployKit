@@ -323,6 +323,12 @@ export interface RuntimeStaticFrontend {
 export interface RuntimeServiceFrontend {
   readonly type: "service";
   readonly service: string;
+  /**
+   * Public build/runtime values for a containerized or server-rendered
+   * frontend. Public by construction: `environment.frontend` refuses
+   * secret-like names, and secret values never reach this contract.
+   */
+  readonly publicEnvironment: Readonly<Record<string, string>>;
 }
 
 export type RuntimeFrontend = RuntimeStaticFrontend | RuntimeServiceFrontend;

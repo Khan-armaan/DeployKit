@@ -20,6 +20,18 @@ export interface DeploymentPlanOptions {
   sourceRef?: string;
   certbotStaging?: boolean;
   serverAddresses?: readonly string[];
+  /**
+   * Hex SHA-256 of the canonical runtime-manifest bytes this plan was compiled
+   * from. Together with the target ID and commit SHA it is the deployment
+   * identity a retry must reproduce exactly.
+   */
+  manifestDigest?: string;
+  /**
+   * Server identity for this deployment. Gateway-managed targets carry the
+   * identity frozen by the compiled runtime manifest, so state, ports, release
+   * directories, and the Nginx site must use it rather than one derived here.
+   */
+  targetId?: string;
 }
 
 export interface PlannedFile {
@@ -171,12 +183,19 @@ export interface DeploymentPlan {
   deploymentId: string;
   project: string;
   target: string;
-  runnerLabel: string;
+  /**
+   * The enrolled self-hosted runner that executes this deployment, or `null`
+   * when the target is gateway-managed and reached through the restricted VPS
+   * forced command instead.
+   */
+  runnerLabel: string | null;
+  execution: "self-hosted-runner" | "gateway";
   githubEnvironment: string;
   source: {
     ref: string;
     commitSha: string | null;
     releaseDirectory: string;
+    manifestDigest: string | null;
   };
   server: {
     supportedOperatingSystems: readonly ["ubuntu-22.04", "ubuntu-24.04"];
@@ -209,6 +228,8 @@ export interface DeploymentPlan {
 
 const defaultPortRange = { start: 20_000, end: 39_999 } as const;
 const commitShaPattern = /^[0-9a-f]{40}$/u;
+const manifestDigestPattern = /^[0-9a-f]{64}$/u;
+const targetIdPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 
 const serverPackages = [
   "ca-certificates",
@@ -333,7 +354,8 @@ function plannedPorts(
           service: name,
           purpose: "pm2",
           bindAddress: "127.0.0.1",
-          allocation: "dynamic",
+          allocation: service.hostPort === undefined ? "dynamic" : "explicit",
+          ...(service.hostPort === undefined ? {} : { requestedPort: service.hostPort }),
           range: { ...range },
         });
       }
@@ -471,13 +493,13 @@ function plannedNginxSite(
   manifest: DeployKitManifest,
   targetName: string,
   releaseDirectory: string,
+  deploymentId: string,
 ): PlannedNginxSite {
   const target = manifest.targets[targetName];
   if (target === undefined) {
     throw new DeploymentPlanError("PLAN_TARGET_NOT_FOUND", `Unknown deployment target '${targetName}'`);
   }
 
-  const deploymentId = makeTargetId(manifest.metadata.name, targetName);
   const serverNames = [target.primaryDomain, ...target.aliases].sort((left, right) => {
     if (left === target.primaryDomain) return -1;
     if (right === target.primaryDomain) return 1;
@@ -533,7 +555,7 @@ function plannedFiles(
   releaseDirectory: string,
   hasCompose: boolean,
   hasPm2: boolean,
-  runnerLabel: string,
+  runnerLabel: string | null,
 ): PlannedFile[] {
   const files: PlannedFile[] = [
     { path: releaseDirectory, purpose: "Immutable checked-out source and build output", kind: "directory" },
@@ -547,7 +569,14 @@ function plannedFiles(
     { path: paths.registryLockFile, purpose: "Shared registry lock", mode: "0600", kind: "file" },
     { path: paths.logsDirectory, purpose: "Per-application and deployment logs", mode: "0750", kind: "directory" },
     { path: paths.acmeWebroot, purpose: "Shared Certbot webroot", mode: "0755", kind: "directory" },
-    { path: `/etc/deploykit/server-${runnerLabel}.json`, purpose: "Enrolled runner and public-address configuration", mode: "0600", kind: "file" },
+    ...(runnerLabel === null
+      ? []
+      : [{
+          path: `/etc/deploykit/server-${runnerLabel}.json`,
+          purpose: "Enrolled runner and public-address configuration",
+          mode: "0600",
+          kind: "file",
+        } as PlannedFile]),
     { path: "/etc/nginx/conf.d/deploykit-websocket-map.conf", purpose: "Shared WebSocket connection-upgrade map", mode: "0644", kind: "file" },
     { path: "/etc/letsencrypt/renewal-hooks/deploy/deploykit-nginx-reload", purpose: "Validated certificate renewal reload hook", mode: "0755", kind: "file" },
     { path: paths.nginxAvailableFile, purpose: "DeployKit-managed Nginx virtual host", mode: "0644", kind: "file" },
@@ -585,6 +614,8 @@ function plannedFiles(
 function validateOptions(options: DeploymentPlanOptions): {
   range: { start: number; end: number };
   commitSha: string | null;
+  manifestDigest: string | null;
+  targetId: string | null;
   sourceRef: string;
   serverAddresses: string[] | "server-addresses";
 } {
@@ -613,9 +644,25 @@ function validateOptions(options: DeploymentPlanOptions): {
     throw new DeploymentPlanError("PLAN_OPTIONS_INVALID", "sourceRef must not be empty");
   }
 
+  if (options.manifestDigest !== undefined && !manifestDigestPattern.test(options.manifestDigest)) {
+    throw new DeploymentPlanError(
+      "PLAN_OPTIONS_INVALID",
+      "manifestDigest must be a lowercase 64-character SHA-256 hex digest",
+    );
+  }
+
+  if (options.targetId !== undefined && !targetIdPattern.test(options.targetId)) {
+    throw new DeploymentPlanError(
+      "PLAN_OPTIONS_INVALID",
+      "targetId must be a lowercase server identifier of letters, digits, and interior hyphens",
+    );
+  }
+
   return {
     range: { ...range },
     commitSha: options.commitSha ?? null,
+    manifestDigest: options.manifestDigest ?? null,
+    targetId: options.targetId ?? null,
     sourceRef: options.sourceRef ?? "<workflow-ref>",
     serverAddresses:
       options.serverAddresses === undefined
@@ -649,7 +696,7 @@ export function createDeploymentPlan(
   }
 
   const normalizedOptions = validateOptions(options);
-  const deploymentId = makeTargetId(manifest.metadata.name, targetName);
+  const deploymentId = normalizedOptions.targetId ?? makeTargetId(manifest.metadata.name, targetName);
   const paths = serverPaths(deploymentId);
   const releaseDirectory = normalizedOptions.commitSha === null
     ? `${paths.releasesDirectory}/<resolved-commit-sha>`
@@ -674,12 +721,14 @@ export function createDeploymentPlan(
     deploymentId,
     project: manifest.metadata.name,
     target: targetName,
-    runnerLabel: target.runnerLabel,
+    runnerLabel: target.runnerLabel ?? null,
+    execution: target.runnerLabel === undefined ? "gateway" : "self-hosted-runner",
     githubEnvironment: target.environment,
     source: {
       ref: normalizedOptions.sourceRef,
       commitSha: normalizedOptions.commitSha,
       releaseDirectory,
+      manifestDigest: normalizedOptions.manifestDigest,
     },
     server: {
       supportedOperatingSystems: ["ubuntu-22.04", "ubuntu-24.04"],
@@ -701,7 +750,7 @@ export function createDeploymentPlan(
       releaseDirectory,
       manifest.compose !== undefined,
       Object.values(manifest.services).some((service) => service.type === "pm2"),
-      target.runnerLabel,
+      target.runnerLabel ?? null,
     ),
     processes: plannedProcesses(
       manifest,
@@ -709,7 +758,7 @@ export function createDeploymentPlan(
       target.publicOverrides,
       portIds,
     ),
-    nginx: plannedNginxSite(manifest, targetName, releaseDirectory),
+    nginx: plannedNginxSite(manifest, targetName, releaseDirectory, deploymentId),
     certificate: {
       provider: "certbot",
       challenge: "webroot",

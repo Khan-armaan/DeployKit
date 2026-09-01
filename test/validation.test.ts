@@ -143,18 +143,31 @@ describe("validateManifest", () => {
     ])));
   });
 
-  it("rejects ambiguous prefix routes and explicit buffering on streams", () => {
+  it("rejects ambiguous prefix routes and explicit buffering on server-sent events", () => {
     const input = validManifest();
     input.routes = [{
-      path: "/socket",
+      path: "/events",
       target: "api",
-      websocket: true,
+      sse: true,
       buffering: true,
     }];
 
     const codes = validateManifest(input).errors.map((entry) => entry.code);
     expect(codes).toContain("ROUTE_PREFIX_AMBIGUOUS");
     expect(codes).toContain("ROUTE_STREAM_BUFFERING_ENABLED");
+  });
+
+  it("allows a buffered WebSocket route, which leaves buffering behind on upgrade", () => {
+    const input = validManifest();
+    input.routes = [{
+      path: "/socket/",
+      target: "api",
+      websocket: true,
+      buffering: true,
+    }];
+
+    const codes = validateManifest(input).errors.map((entry) => entry.code);
+    expect(codes).not.toContain("ROUTE_STREAM_BUFFERING_ENABLED");
   });
 
   it("keeps schema failures in the same structured result", () => {

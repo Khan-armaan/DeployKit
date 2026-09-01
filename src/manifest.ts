@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 
+import { DeployKitError } from "./errors.js";
+
 export const DEPLOYKIT_API_VERSION = "deploykit/v1alpha1" as const;
 export const DEFAULT_MANIFEST_FILE = "deploykit.yaml";
 
@@ -139,6 +141,7 @@ export const pm2ServiceSchema = z.strictObject({
   buildScript: z.string().regex(packageScriptPattern, "must be a package script name").optional(),
   startScript: z.string().regex(packageScriptPattern, "must be a package script name"),
   portEnvironmentVariable: environmentNameSchema.optional(),
+  hostPort: z.number().int().min(1).max(65_535).optional(),
   healthCheck: healthCheckSchema,
 });
 
@@ -168,6 +171,8 @@ export const staticFrontendSchema = z.strictObject({
 export const serviceFrontendSchema = z.strictObject({
   type: z.literal("service"),
   service: identifierSchema,
+  /** Public build/runtime values for a containerized or server-rendered frontend. */
+  publicEnvironment: z.record(environmentNameSchema, z.string()).default({}),
 });
 
 export const frontendSchema = z.discriminatedUnion("type", [
@@ -255,7 +260,10 @@ export const secretsSchema = z.strictObject({
 });
 
 export const targetSchema = z.strictObject({
-  runnerLabel: z.string().regex(runnerLabelPattern, "must match an enrolled lowercase server label"),
+  runnerLabel: z
+    .string()
+    .regex(runnerLabelPattern, "must match an enrolled lowercase server label")
+    .optional(),
   primaryDomain: domainSchema,
   aliases: z.array(domainSchema).default([]),
   environment: z.string().min(1).max(255).default("production"),
@@ -304,6 +312,22 @@ export type DeployTarget = z.infer<typeof targetSchema>;
 export type DeployKitManifest = z.infer<typeof deployKitManifestSchema>;
 export type ProjectManifest = DeployKitManifest;
 export type DeployKitManifestInput = z.input<typeof deployKitManifestSchema>;
+
+/**
+ * Legacy self-hosted-runner targets name an enrolled runner. Targets compiled
+ * from `deploykit.config.yaml` reach their VPS through the restricted gateway
+ * instead and have no runner label, so every legacy runner path must ask for it
+ * explicitly rather than assume it exists.
+ */
+export function requireRunnerLabel(target: DeployTarget, targetName: string): string {
+  if (target.runnerLabel === undefined) {
+    throw new DeployKitError(
+      "DK_UNSUPPORTED",
+      `Target '${targetName}' has no enrolled runner label, so it cannot use the legacy self-hosted-runner path`,
+    );
+  }
+  return target.runnerLabel;
+}
 
 export class ManifestFileError extends Error {
   readonly code: "MANIFEST_READ_FAILED" | "MANIFEST_YAML_INVALID";

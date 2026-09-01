@@ -65,12 +65,26 @@ async function validateNodeProject(
   }
 }
 
+export interface ProjectValidationOptions {
+  manifestPath?: string;
+  /**
+   * Absolute root of the application source tree. A compiled runtime manifest
+   * does not live beside the application it deploys — the local config sits in
+   * the repository while the VPS validates an immutable checked-out tree — so
+   * the source root is supplied independently of any manifest location.
+   */
+  sourceRoot?: string;
+  inspectComposeConfig?: boolean;
+}
+
 export async function validateProject(
   manifest: ProjectManifest,
-  options: { manifestPath?: string; inspectComposeConfig?: boolean } = {}
+  options: ProjectValidationOptions = {}
 ): Promise<ProjectValidationResult> {
   const semantic = validateManifest(manifest);
-  const root = dirname(resolve(options.manifestPath ?? "deploykit.yaml"));
+  const root = options.sourceRoot === undefined
+    ? dirname(resolve(options.manifestPath ?? "deploykit.yaml"))
+    : resolve(options.sourceRoot);
   const issues = [...semantic.issues];
   let compose: ComposeInspection | undefined;
 

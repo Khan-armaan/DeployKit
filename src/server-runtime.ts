@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { DeployKitError } from "./errors.js";
-import { loadManifest } from "./manifest.js";
+import { loadManifest, requireRunnerLabel } from "./manifest.js";
 import { validateProject } from "./project-validation.js";
 import {
   DeploymentApplier,
@@ -56,7 +56,7 @@ export async function runServerApply(options: ServerApplyOptions): Promise<unkno
   if (!versionSatisfiesRequirement(manifest.metadata.requiredVersion, VERSION)) {
     throw new DeployKitError("DK_PREFLIGHT_FAILED", `Manifest requires DeployKit ${manifest.metadata.requiredVersion}, but server has ${VERSION}`);
   }
-  const serverConfig = await loadServerConfig(target.runnerLabel);
+  const serverConfig = await loadServerConfig(requireRunnerLabel(target, options.target));
   const plan = planDeployment(manifest, options.target, options.commit);
   if (options.dryRun) return plan;
   if (typeof process.getuid === "function" && process.getuid() !== 0) {

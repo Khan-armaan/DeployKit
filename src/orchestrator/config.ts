@@ -128,3 +128,28 @@ export {
   type EnvironmentPartition,
   type ParsedOperatorConfig,
 } from "./config-schema.js";
+export {
+  canonicalYaml,
+  canonicalRuntimeManifestBytes,
+  compareCodePoints,
+  computeManifestDigest,
+  manifestDigestMatches,
+  CanonicalizationError,
+  type CanonicalValue,
+} from "./canonical.js";
+export {
+  compareRuntimeRoutes,
+  compileRuntimeManifest,
+  makeOrchestratorTargetId,
+  RUNTIME_HEALTH_DEFAULTS,
+  RUNTIME_HTTP_EXPECTED_STATUSES,
+  RUNTIME_ROUTE_TIMEOUT_DEFAULTS,
+  type CompiledDeployment,
+  type CompileOptions,
+} from "./compile.js";
+export {
+  createCompiledDeploymentPlan,
+  toProjectManifest,
+  validateCompiledProject,
+  type CompiledProjectValidationOptions,
+} from "./project.js";

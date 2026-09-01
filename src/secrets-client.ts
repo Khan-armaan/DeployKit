@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import prompts from "prompts";
-import type { ProjectManifest } from "./manifest.js";
+import { requireRunnerLabel, type ProjectManifest } from "./manifest.js";
 import { makeTargetId } from "./server/ids.js";
 import { secretRequirementsFromManifest } from "./server/secrets.js";
 import { requireServer } from "./local-config.js";
@@ -44,7 +44,7 @@ export async function setRemoteSecrets(
 ): Promise<unknown> {
   const target = manifest.targets[targetName];
   if (!target) throw new Error(`Unknown target '${targetName}'`);
-  const server = await requireServer(target.runnerLabel);
+  const server = await requireServer(requireRunnerLabel(target, targetName));
   const names = secretNames(manifest);
   let contents: string;
   if (options.file && options.file !== "-") contents = await readFile(options.file, "utf8");
@@ -62,7 +62,7 @@ export async function setRemoteSecrets(
 export async function checkRemoteSecrets(manifest: ProjectManifest, targetName: string): Promise<unknown> {
   const target = manifest.targets[targetName];
   if (!target) throw new Error(`Unknown target '${targetName}'`);
-  const server = await requireServer(target.runnerLabel);
+  const server = await requireServer(requireRunnerLabel(target, targetName));
   const names = secretNames(manifest);
   const targetId = makeTargetId(manifest.metadata.name, targetName);
   const result = await runRemoteDeployKit(server.host, remoteSecretArgs("check", targetId, names.required, names.generated), { hostKey: server.hostKey });

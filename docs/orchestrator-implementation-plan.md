@@ -147,6 +147,10 @@ Completion gate:
 - All topology fixtures pass parsing, project validation, public planning, server planning, and deterministic generation.
 - Config secrets are absent from every compiled artifact.
 
+Delivered by: `src/orchestrator/canonical.ts` (the `deploykit/runtime-yaml-canonical/v1` serializer, code-point key ordering, and the versioned SHA-256 digest), `src/orchestrator/compile.ts` (runtime defaults, canonical sorting, `hostPort: auto` handling, the repository/target-derived target id, and compile-time semantics), `src/orchestrator/project.ts` (the lossless projection onto the existing manifest shape plus compiled project validation and planning), and `test/orchestrator-compile.test.ts`. The compiler reproduces the frozen Phase 1 gateway manifest frame byte for byte, so `test/fixtures/orchestrator/protocol/valid/apply.jsonl` is now generated behavior rather than an illustration.
+
+Supporting changes to existing modules: `validateProject` accepts an explicit `sourceRoot`; `DeploymentPlan` gained `execution`, a nullable `runnerLabel`, `source.manifestDigest`, and a `targetId` option so gateway-managed targets use the identity frozen by the manifest; `pm2ServiceSchema` gained `hostPort`; `serviceFrontendSchema` gained `publicEnvironment`; `targetSchema.runnerLabel` became optional behind `requireRunnerLabel` because a gateway-managed target has no enrolled runner; and `ROUTE_STREAM_BUFFERING_ENABLED` narrowed to server-sent events, which is the only case where `proxy_buffering` still applies. `src/orchestrator/` remains unexported from `src/index.ts`, and bare `deploykit deploy` compiles and reports the digest but still stops at `DK_UNSUPPORTED`.
+
 ### Phase 4 — Local orchestrator core with fake adapters
 
 Depends on: Phase 3 complete.
@@ -453,7 +457,7 @@ Completion gate:
 | --- | --- | --- |
 | 1 | Contracts and fixtures | Complete |
 | 2 | Config scaffolding/loading/schema | Complete |
-| 3 | Compiler and project validation | Planned |
+| 3 | Compiler and project validation | Complete |
 | 4 | Orchestrator core with fakes | Planned |
 | 5 | Server runtime foundation | Planned |
 | 6 | Gateway protocol/server command | Planned |
