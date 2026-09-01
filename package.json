@@ -1,6 +1,6 @@
 {
   "name": "@deploykit001/deploykit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Deterministic, manifest-driven deployments to Ubuntu VPS hosts",
   "repository": {
     "type": "git",

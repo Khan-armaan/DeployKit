@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Documentation only; the shipped CLI behaviour is unchanged from 0.1.1.
+- Rewrote the README and AGENTS.md around the one-file `deploykit.config.yaml` workflow.
+- Clarified in `assets/deploykit.config.example.yaml` that the template ships with the npm package and that `deploykit deploy` will seed `deploykit.config.yaml` from it with mode 0600.
+
 ## 0.1.1
 
 - No user-facing changes; package contents are identical to 0.1.0.
