@@ -4,6 +4,7 @@ import prompts from "prompts";
 import { discoverComposeFiles, inspectCompose, type ComposeInspection } from "./compose.js";
 import { pathExists } from "./fs.js";
 import type { DeployKitManifestInput } from "./manifest.js";
+import { VERSION } from "./version.js";
 
 export interface InitAnswers {
   projectName: string;
@@ -157,7 +158,7 @@ export async function createStarterManifest(root: string, answers: InitAnswers):
 
   return {
     apiVersion: "deploykit/v1alpha1",
-    metadata: { name: slug(answers.projectName), requiredVersion: "0.1.0" },
+    metadata: { name: slug(answers.projectName), requiredVersion: `^${VERSION}` },
     ...(composeFiles.length > 0 ? { compose: { files: composeFiles } } : {}),
     services,
     frontend,

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- No user-facing changes; package contents are identical to 0.1.0.
+- Release workflow now skips build, publish, and upload when the tagged version is already on the registry, so re-triggering a release no longer fails with a 403.
+
 ## 0.1.0
 
 - Initial versioned manifest and TypeScript CLI.
