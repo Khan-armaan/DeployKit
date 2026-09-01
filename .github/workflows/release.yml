@@ -29,14 +29,27 @@ jobs:
       - name: Require tag and package version to match
         run: |
           node --input-type=module --eval 'import p from "./package.json" with { type: "json" }; if (`v${p.version}` !== process.env.GITHUB_REF_NAME) process.exit(1)'
+      - name: Skip if this version is already on the registry
+        id: registry
+        run: |
+          spec=$(node --input-type=module --eval 'import p from "./package.json" with { type: "json" }; process.stdout.write(`${p.name}@${p.version}`)')
+          if npm view "$spec" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$spec is already published; skipping build, publish, and upload."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Verify and build release tarball
         id: pack
+        if: steps.registry.outputs.published == 'false'
         run: npm run check && node scripts/package-release.mjs
       - name: Publish with npm provenance
+        if: steps.registry.outputs.published == 'false'
         run: npm publish "${{ steps.pack.outputs.filename }}" --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Attach tarball and SHA-256 checksum
+        if: steps.registry.outputs.published == 'false'
         run: gh release upload "$GITHUB_REF_NAME" "${{ steps.pack.outputs.filename }}" "${{ steps.pack.outputs.checksum_file }}"
         env:
           GH_TOKEN: ${{ github.token }}
