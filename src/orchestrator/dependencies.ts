@@ -178,6 +178,7 @@ export interface GatewayBootstrapRequest {
   readonly connection: AdministratorSshConnection;
   readonly binding: RootOwnedGatewayBinding;
   readonly packageFile: string;
+  readonly packageName: string;
   readonly packageSha256: Sha256Hex;
   readonly configureFirewall: boolean;
 }

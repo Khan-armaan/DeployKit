@@ -63,6 +63,7 @@ export const SECOND_REQUEST_ID = "9a8b7c6d-5e4f-4a3b-9c8d-7e6f5a4b3c2d";
 
 export const FIXTURE_RUNTIME_BUNDLE: RuntimeBundleReference = {
   version: "0.1.3",
+  packageName: "@deploykit001/deploykit",
   packageFile: "/tmp/deploykit-server-bundle.tgz",
   packageSha256: "f".repeat(64),
 };

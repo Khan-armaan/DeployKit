@@ -635,6 +635,7 @@ export async function runDeployment(
         connection,
         binding: expectedBinding,
         packageFile: options.runtimeBundle.packageFile,
+        packageName: options.runtimeBundle.packageName,
         packageSha256: options.runtimeBundle.packageSha256,
         configureFirewall: config.server.configureFirewall === true,
       });

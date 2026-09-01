@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-The executable instructions later in this file describe the current v0.1 root-runner baseline. The matrix in the next section is the **planned Phase 14 acceptance gate** for the one-file orchestrator and restricted gateway. It is an outline only: Phase 1 adds no production orchestration, GitHub mutation, gateway installation, or VPS behavior.
+The matrix in the next section is the **Phase 14 acceptance gate** for the one-file orchestrator and restricted gateway. Phases 1-8 have landed, so gateway installation, the root-owned binding, the staged/active key lifecycle, and exact-SHA source retrieval are real behavior a disposable host can now exercise; GitHub mutation and dispatch are not, because Phases 9-12 own them. The legacy instructions at the end of this file describe the v0.1 root-runner baseline and apply only to hosts enrolled by an earlier release.
 
 ## Planned Phase 14 disposable-VPS matrix
 

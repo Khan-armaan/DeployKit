@@ -272,27 +272,52 @@ export function configureProgram(): Command {
 
   const server = program.command("server").description("manage or execute the deterministic server runtime");
   server.command("bootstrap")
-    .description("idempotently enroll an Ubuntu VPS over SSH")
-    .requiredOption("--host <ssh-target>")
+    .description("idempotently install the restricted DeployKit gateway on an Ubuntu VPS")
+    .requiredOption("--host <hostname>")
+    .requiredOption("--user <ssh-user>")
+    .requiredOption("--identity-file <path>", "administrator SSH private key")
     .requiredOption("--repo <owner/name>")
-    .requiredOption("--label <server-label>")
+    .requiredOption("--environment <name>", "GitHub Environment for this target")
+    .requiredOption("--target <name>")
+    .option("--port <number>", "SSH port", "22")
+    .option("--host-key-fingerprint <SHA256:...>", "pinned VPS host-key fingerprint")
     .option("--configure-firewall")
-    .option("--accept-root-runner-risk")
-    .option("--accept-host-key")
     .option("--dry-run")
-    .action(async (options: { host: string; repo: string; label: string; configureFirewall?: boolean; acceptRootRunnerRisk?: boolean; acceptHostKey?: boolean; dryRun?: boolean }, command: Command) => {
-      let acceptHostKey = Boolean(options.acceptHostKey);
-      if (!options.dryRun && !acceptHostKey && process.stdin.isTTY) {
-        const fingerprint = await readSshFingerprint(options.host);
-        acceptHostKey = await confirm(`Trust SSH host key ${fingerprint}?`, false);
+    .action(async (options: {
+      host: string;
+      user: string;
+      identityFile: string;
+      repo: string;
+      environment: string;
+      target: string;
+      port: string;
+      hostKeyFingerprint?: string;
+      configureFirewall?: boolean;
+      dryRun?: boolean;
+    }, command: Command) => {
+      const port = Number.parseInt(options.port, 10);
+      if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+        throw new DeployKitError("DK_USAGE", "--port must be a TCP port number");
+      }
+      let fingerprint = options.hostKeyFingerprint;
+      if (!options.dryRun && fingerprint === undefined) {
+        // The host key is pinned, never trusted on first use. Without a
+        // configured fingerprint the operator must confirm the scanned one.
+        const scanned = await readSshFingerprint(options.host, port);
+        const accepted = await confirm(`Trust SSH host key ${scanned}?`, false);
+        if (!accepted) throw new DeployKitError("DK_SECURITY_ACK_REQUIRED", "SSH host key was not confirmed");
+        fingerprint = scanned.split(/\s+/)[1] ?? "";
       }
       const result = await bootstrapServer({
         host: options.host,
+        user: options.user,
+        port,
+        identityFile: options.identityFile,
+        hostKeyFingerprint: fingerprint ?? "SHA256:",
         repository: options.repo,
-        label: options.label,
+        githubEnvironment: options.environment,
+        targetName: options.target,
         configureFirewall: options.configureFirewall,
-        acceptRootRunnerRisk: Boolean(options.acceptRootRunnerRisk),
-        acceptHostKey,
         dryRun: options.dryRun
       });
       reporter(command).result("DK_BOOTSTRAP", result);

@@ -2,15 +2,15 @@
 
 ## Implementation status
 
-The released v0.1 architecture installs a repository-scoped GitHub Actions runner as root. The restricted-gateway model documented below is a **Phase 1 design contract**, not current production behavior. Until the gateway, bootstrap migration, hosted workflow, and disposable-VPS acceptance phases are complete, operators must follow the root-runner warning and controls in this document.
+The restricted-gateway model documented below is now installed rather than only designed. `assets/bootstrap.sh` no longer enrolls a GitHub Actions runner: a freshly bootstrapped host receives the non-login `deploykit-gateway` account, a root-owned binding, one forced-command entry, one no-argument sudo entry, the checksum-verified standalone runtime, the pinned GitHub host keys, and a stable read-only repository key. No Actions Runner package, registration token, job hook, or service is placed on a fresh host.
 
-The gateway protocol and its exact-SHA source retrieval are now implemented in the shipped code and covered by tests, but no bootstrap installs them: nothing in this package places a gateway user, binding, forced command, or repository key on a host yet. The pinned GitHub host keys those paths will use ship as the `assets/github-known-hosts` asset.
+The remaining phases are the GitHub side of the flow — typed client primitives, the reviewed control artifacts, cross-plane key and Environment reconciliation, dispatch, and the CLI cutover — plus the disposable-VPS acceptance matrix. Until those pass, `deploykit deploy` still stops before dispatch and the model must not be described as production-ready.
 
-## Current v0.1 root-runner warning
+## Hosts bootstrapped by DeployKit v0.1.x
 
-DeployKit v0.1 installs a repository-scoped GitHub Actions runner as root. This is not a sandbox. A workflow accepted by the runner, a Docker build, or a host package script can obtain full control of the VPS.
+A host enrolled by an earlier release still carries a repository-scoped GitHub Actions runner running as root. That is not a sandbox: a workflow accepted by the runner, a Docker build, or a host package script can obtain full control of the VPS. Re-running the current bootstrap does not remove it — the approval-gated migration that stops and unregisters a legacy runner is owned by a later phase.
 
-Before using DeployKit in production:
+Until such a host is migrated:
 
 1. Keep the application repository private and restrict write access.
 2. Protect the default branch and `.github/workflows/deploykit.yml` with required review.
@@ -19,11 +19,21 @@ Before using DeployKit in production:
 5. Enroll one separately labeled runner per trusted repository.
 6. Rotate application credentials after suspected repository, runner, or Docker compromise.
 
-The generated v0.1 workflow pins third-party Actions by commit and checks that the workflow source is the default branch. The bootstrap runner hook is defense in depth, not a complete boundary: application code from the selected ref is intentionally built on the VPS.
+Application code from the selected ref is intentionally built on the VPS in both models. Trusted Dockerfiles and package scripts can therefore control the host even after the persistent root runner is gone; the gateway narrows who may *start* a deployment, not what a deployment is allowed to build.
 
-## Planned restricted-gateway security contract
+## Restricted-gateway security contract
 
-The future one-file orchestrator replaces the persistent root runner with a GitHub-hosted runner and a forced-command SSH gateway. This section freezes the intended security boundary for later implementation phases; it does not assert that the current CLI or bootstrap script enforces it.
+The one-file orchestrator replaces the persistent root runner with a GitHub-hosted runner and a forced-command SSH gateway. The trust-zone, key, forced-command, and bootstrap properties below are enforced by the shipped gateway, installer, and bootstrap boundary; the GitHub-side properties remain the contract that later phases must satisfy.
+
+### Administrator SSH and bootstrap
+
+- The VPS host key is pinned by fingerprint in `deploykit.config.yaml`. Every administrator connection scans the host, digests each offered key, and proceeds only with the key whose fingerprint matches; anything else raises `DK_SSH_HOST_KEY_MISMATCH` before data is sent.
+- Every remote invocation is an argv array of validated arguments. No configured value becomes shell syntax on the far side.
+- Bootstrap is idempotent for an identical binding and fails closed with `DK_GATEWAY_BINDING_MISMATCH` when a host is already bound to another repository, Environment, target, or binding id. It never repoints an existing host.
+- The installer's claim is not trusted: the installed bundle version, checksum, and binding are re-verified by a real forced-command handshake before a bootstrap is reported as successful.
+- The gateway account is created with `/usr/sbin/nologin`, a locked password, no Docker group membership, and a single sudoers entry naming one no-argument program. `env_reset` is in force; only `SSH_ORIGINAL_COMMAND`, `SSH_TTY`, `SSH_AUTH_SOCK`, `DISPLAY`, and `XAUTHORITY` are preserved, precisely so the forced command can still refuse a client-supplied command, a PTY, and forwarded channels.
+- Only nonsecret facts leave the host: the repository *public* key, its fingerprint, the binding id, and the installed runtime version and checksum. The repository private key is generated on the VPS, kept at mode `0600`, reused across reruns, and never transmitted.
+- Enabling the firewall allows the administrator's actual SSH port before `ufw --force enable`, so reconciling a host whose sshd moved off port 22 cannot lock the operator out.
 
 ### Trust zones and keys
 

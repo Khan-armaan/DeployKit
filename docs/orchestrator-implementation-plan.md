@@ -311,6 +311,18 @@ Completion gate:
 - Repository private-key mode and stability, public-key return, packaged host keys, and interrupted key rotation are tested.
 - No Actions Runner package, token, hook, or service is installed on a fresh host.
 
+Delivered by: the rewritten `assets/bootstrap.sh` (gateway account, root-owned binding and host facts, forced-command entry, narrow sudoers, checksum-verified bundle, packaged host keys, and the stable repository key), `assets/gateway-binding.sh` (the binding reconciler that refuses to repoint a host), `assets/gateway-keys.sh` (the staged/active owned `authorized_keys` lifecycle), `src/orchestrator/administrator-ssh.ts` (the production `AdministratorSshPort`, host-key pinning, the non-mutating handshake, and the key lifecycle port), `src/orchestrator/runtime-bundle.ts` (the packed, digested, content-verified bundle reference), the rewritten `src/bootstrap.ts` and its `deploykit server bootstrap` command, `test/bootstrap.test.ts`, and `test/orchestrator-bootstrap.test.ts`.
+
+The installer enrolls no runner. A fresh host gets the system account `deploykit-gateway` with `/usr/sbin/nologin`, a locked password, no Docker group, and one sudoers entry naming `/usr/local/lib/deploykit/gateway-entry` with a trailing `""` so it accepts no arguments at all. That entry is the only program the account may run as root, and it execs the frozen `deploykit gateway` forced command. `env_reset` is in force with exactly four `env_keep` variables — `SSH_ORIGINAL_COMMAND`, `SSH_TTY`, `SSH_AUTH_SOCK`, `DISPLAY`, `XAUTHORITY` — because stripping them would silently defeat the Phase 6 checks that refuse a client-supplied command, a PTY, and forwarded channels, and duplicating those checks in shell would give the boundary two sources of truth.
+
+Identity is reconciled, never repointed. `gateway-binding.sh` compares the repository, Environment, target name, target id, and binding id of an existing binding and exits 4 — the frozen `DK_GATEWAY_BINDING_MISMATCH` exit code — without touching the file when any of them differ. An identical binding rewrites to byte-identical bytes and reports `changed: false`, so a rerun is a genuine no-op. Runtime version, bundle checksum, and repository-key identity may move on an upgrade or rotation; `activeGatewayKeyId` and `pendingGatewayKeyId` are host-owned and always preserved from the existing document.
+
+Key rotation is staged before it is activated, and only entries carrying *this* binding's marker are ever rewritten. `gateway-keys.sh` identifies an owned entry solely by its comment — `deploykit-gateway:<bindingId>:<state>:<keyId>` — so an operator's own key, and a second target sharing the host, are untouched by every operation. Staging drops this binding's pending entries and appends the replacement, leaving the proven active key in place; activation promotes one entry and drops the binding's others in a single atomic rewrite. An interruption after staging leaves both keys usable, and an interruption during activation leaves either the old state or the new one, never neither.
+
+The local boundary pins the host by fingerprint rather than trusting it on first use: every connection scans the host, digests each offered key, and continues only with the key whose fingerprint matches `server.hostKeyFingerprint`. Bootstrap uploads the installer, both helpers, the pinned host keys, and the packed bundle, then refuses to believe the installer's own report — the installed bundle version, checksum, and binding are re-verified by a real forced-command handshake before the bootstrap is reported successful. Only nonsecret facts come back: the repository *public* key, its fingerprint, and the installed identity.
+
+Supporting changes to existing modules: `RuntimeBundleReference` and `GatewayBootstrapRequest` gained `packageName`, which the installer compares with the name inside the tarball, replacing the hard-coded `@project/deploykit` expectation that would have rejected the published package; `src/server/bootstrap.ts` plans a `gateway` phase instead of a `runner` phase and no longer takes a root-runner acknowledgement; `ACTIONS_RUNNER_VERSION` was removed from `src/version.ts`; and the bootstrap no longer writes a local server record, because the root-owned binding and GitHub are the authoritative state. `deploykit server bootstrap` remains as an internal primitive and now takes structured host, user, port, identity, fingerprint, repository, Environment, and target inputs. `src/orchestrator/` remains unexported from `src/index.ts`, and bare `deploykit deploy` still stops at `DK_UNSUPPORTED` after compiling.
+
 ### Phase 9 — Typed GitHub client primitives
 
 Depends on: Phase 8 complete.
@@ -488,7 +500,7 @@ Completion gate:
 | 5 | Server runtime foundation | Complete |
 | 6 | Gateway protocol/server command | Complete |
 | 7 | Exact-SHA source provider | Complete |
-| 8 | VPS bootstrap/key lifecycle | Planned |
+| 8 | VPS bootstrap/key lifecycle | Complete |
 | 9 | GitHub client primitives | Planned |
 | 10 | Control artifacts/setup PR | Planned |
 | 11 | Cross-plane keys/Environment | Planned |

@@ -210,7 +210,7 @@ The remote runtime must:
 | `src/manifest.ts`, `src/validation.ts`, `src/project-validation.ts` | Keep strict normalized validation; add compilation from the local config rather than accepting secret values in the runtime manifest. |
 | `src/plan.ts` | Describe the hosted runner, restricted SSH transport, automatic ports, and compiled manifest. |
 | `src/generators/github.ts` | Replace self-hosted jobs with the generic protected `ubuntu-latest` SSH workflow. |
-| `src/bootstrap.ts`, `assets/bootstrap.sh` | Retain verified Ubuntu/runtime provisioning; replace Actions Runner enrollment with restricted SSH gateway/key setup. |
+| `src/bootstrap.ts`, `assets/bootstrap.sh` | Done: verified Ubuntu/runtime provisioning retained; Actions Runner enrollment replaced by the restricted SSH gateway, root-owned binding, and staged/active key lifecycle in `assets/gateway-binding.sh` and `assets/gateway-keys.sh`. |
 | `src/github.ts` | Add Environment secret/variable reconciliation, managed-workflow setup PRs, exact-SHA resolution, dispatch, and run following. |
 | `src/remote.ts` | Use structured host/user/port/key inputs, strict host keys, argv execution, and the restricted gateway protocol. |
 | `src/server-cli.ts`, `src/server-runtime.ts` | Add the narrow receive/clone-and-apply gateway; never expose local bootstrap/advisor/general shell commands. |
@@ -264,8 +264,4 @@ Tests for the one-command migration must cover:
 - same-SHA plus manifest-digest resume;
 - packed-artifact bootstrap smoke coverage.
 
-Existing high-value suites are `test/manifest.test.ts`, `test/validation.test.ts`, `test/plan.test.ts`, `test/generators.test.ts`, `test/fixtures.test.ts`, `test/server-state-secrets.test.ts`, `test/server-apply.test.ts`, `test/server-registry.test.ts`, `test/server-primitives.test.ts`, `test/production-driver.test.ts`, `test/bootstrap.test.ts`, and `test/server-cli.test.ts`.
-
-## Known packaging inconsistency
-
-The current package metadata names the npm package `@deploykit001/deploykit`, while `assets/bootstrap.sh` accepts only `@project/deploykit` when inspecting the uploaded tarball. A real bootstrap will reject the package even though unit tests and the build pass. Treat this as an existing defect, fix the installer/package expectation as part of the deployment-model migration, and add a packed-tarball installer regression test.
+Existing high-value suites are `test/manifest.test.ts`, `test/validation.test.ts`, `test/plan.test.ts`, `test/generators.test.ts`, `test/fixtures.test.ts`, `test/server-state-secrets.test.ts`, `test/server-apply.test.ts`, `test/server-registry.test.ts`, `test/server-primitives.test.ts`, `test/production-driver.test.ts`, `test/bootstrap.test.ts`, `test/orchestrator-bootstrap.test.ts`, and `test/server-cli.test.ts`.

@@ -80,6 +80,8 @@ function sortedRecord(values: Readonly<Record<string, string>>): Record<string, 
 /** Checksum-verified standalone server bundle installed by the gateway host. */
 export interface RuntimeBundleReference {
   readonly version: string;
+  /** npm package name; the installer compares it with the name inside the tarball. */
+  readonly packageName: string;
   readonly packageFile: string;
   readonly packageSha256: Sha256Hex;
 }

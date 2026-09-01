@@ -99,20 +99,28 @@ describe("server primitives", () => {
     expect(runner.invocations[0]?.args).toEqual(["compose", "up", "--detach"]);
   });
 
-  it("plans supported Ubuntu hosts and requires root-runner risk acknowledgement", () => {
+  it("plans supported Ubuntu hosts around the gateway rather than a root runner", () => {
     const facts = assertSupportedUbuntu("ID=ubuntu\nVERSION_ID=24.04\n", "aarch64\n");
     expect(() => planBootstrap(facts, {
       repository: "owner/repo",
-      runnerLabel: "vps-one",
-      acknowledgeRootRunnerRisk: false,
+      githubEnvironment: "production",
+      targetName: "production",
+      targetId: "0".repeat(31),
     })).toThrowError(expect.objectContaining({ code: "SERVER_STATE_INVALID" }));
-    expect(planBootstrap(facts, {
+
+    const actions = planBootstrap(facts, {
       repository: "owner/repo",
-      runnerLabel: "vps-one",
-      acknowledgeRootRunnerRisk: true,
-    })).toEqual(expect.arrayContaining([
+      githubEnvironment: "production",
+      targetName: "production",
+      targetId: "04809ce707a77a199e6b989440139ba0",
+    });
+    expect(actions).toEqual(expect.arrayContaining([
       expect.objectContaining({ description: "Enable Docker" }),
-      expect.objectContaining({ phase: "runner" }),
+      expect.objectContaining({ phase: "gateway", path: "/etc/deploykit/gateway/binding.json" }),
+      expect.objectContaining({ phase: "gateway", path: "/etc/sudoers.d/deploykit-gateway", mode: 0o440 }),
+      expect.objectContaining({ phase: "gateway", path: "/etc/deploykit/gateway/repository-key", mode: 0o600 }),
     ]));
+    expect(actions.some((action) => action.phase === ("runner" as never))).toBe(false);
+    expect(JSON.stringify(actions)).not.toContain("actions-runner");
   });
 });
