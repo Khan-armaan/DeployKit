@@ -1,8 +1,8 @@
 # DeployKit one-file deployment configuration.
 #
-# Copy this file to deploykit.config.yaml, replace every example value, and keep
-# the resulting file untracked with mode 0600. `deploykit deploy` is the only
-# intended public workflow. The current v0.1 CLI does not implement this
+# This file is bundled with the npm package. On first use, `deploykit deploy`
+# creates deploykit.config.yaml from it with mode 0600 and waits while the user
+# replaces the example values. The current v0.1 CLI does not implement this
 # contract yet; this template defines the required next-version interface.
 
 apiVersion: deploykit/config/v1alpha1

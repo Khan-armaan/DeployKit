@@ -21,9 +21,43 @@ Do not require users to manually chain `init`, `validate`, `plan`, `server boots
 
 The current v0.1 implementation does not yet satisfy this contract. Contributors should reuse its deterministic server engine while replacing the multi-command onboarding and persistent self-hosted root runner described by the current source.
 
+## How the user receives the configuration file
+
+The example is a package asset, not a file users should hunt for in a global `node_modules` directory. Keep `assets/deploykit.config.example.yaml` in the npm tarball through the `files` allowlist in `package.json` and add a packed-artifact regression test for that exact path.
+
+The first invocation from an application repository is still:
+
+```bash
+deploykit deploy
+```
+
+When `deploykit.config.yaml` does not exist, that command must first perform local setup:
+
+1. Resolve the bundled example relative to the installed package, whether the CLI was installed globally, locally, or invoked through `npx`.
+2. Atomically copy it to the application root as `deploykit.config.yaml` with create-exclusive behavior and mode `0600`.
+3. Add the path to the repository-local Git exclude file resolved with Git (normally `.git/info/exclude`). Support worktrees where `.git` is a file. Do not modify the application's tracked `.gitignore` merely to scaffold DeployKit.
+4. Verify that the resulting file is untracked, unstaged, regular, non-symlinked, user-owned, and not group/world-readable.
+5. Before authentication, network access, secret reading, workflow changes, or VPS mutation, show the path and wait for the user to edit the file and confirm. Securely reopen and validate it, then continue the same deployment invocation.
+
+Never overwrite an existing file. In a non-interactive environment, create the file and exit with one instruction to fill it and rerun the same command. A user browsing the source or npm package may copy the example manually, but that is a fallback, not the documented primary flow.
+
+## Exact user deployment journey
+
+The user must already control three external resources: a trusted application repository pushed to GitHub, an SSH-accessible supported Ubuntu VPS, and direct DNS A/AAAA records for the configured domains. GitHub CLI authentication and a trusted administrator SSH identity must also be available locally; DeployKit should detect missing prerequisites and explain them without partially deploying.
+
+The documented flow is:
+
+1. Install the CLI once with `npm install --global @deploykit001/deploykit`, or use `npx --yes @deploykit001/deploykit deploy` instead of a global installation.
+2. From the pushed application repository, run `deploykit deploy`. On first use it creates the protected local configuration file and waits without making remote changes.
+3. Edit only `deploykit.config.yaml`: set repository/ref, target/domain, VPS connection and pinned host key, workload/build details, routes, public frontend values, private backend values, and generated-secret names. Return to the waiting prompt to continue.
+4. If protected-branch policy requires review of the generated workflow, approve the setup pull request while the command waits; the same invocation continues after merge.
+5. Read the final HTTPS URL, deployed commit SHA, allocated ports, and health result from the command output.
+
+There are no separate required DeployKit commands for validation, planning, bootstrap, secret upload, retry, status, or logs. If the initial process was non-interactive or interrupted, running the same `deploykit deploy` command continues from the local or remote checkpoint. Re-running it after a same-SHA failure resumes the durable deployment. The unavoidable configuration edit and any repository-policy approval are user decisions, not additional deployment commands.
+
 ## Single configuration file
 
-`assets/deploykit.config.example.yaml` defines the intended next-version interface. The operator copies its structure into `deploykit.config.yaml` and supplies all deployment configuration there:
+`assets/deploykit.config.example.yaml` defines the intended next-version interface. The CLI materializes it as `deploykit.config.yaml`, and the operator supplies all deployment configuration there:
 
 - GitHub repository and application ref;
 - deployment target and protected GitHub Environment;
