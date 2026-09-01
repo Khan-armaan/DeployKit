@@ -1,4 +1,9 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Writable } from "node:stream";
+import { promisify } from "node:util";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -15,6 +20,8 @@ import { DeployKitError } from "../src/errors.js";
 import { ManifestFileError, parseManifest, type ProjectManifest } from "../src/manifest.js";
 import { ServerError } from "../src/server/errors.js";
 import { assertValidManifest } from "../src/validation.js";
+
+const execFileAsync = promisify(execFile);
 
 function manifest(): ProjectManifest {
   return parseManifest({
@@ -100,6 +107,31 @@ describe("public CLI contract", () => {
       await expect(main(["node", "deploykit"])).resolves.toBeUndefined();
       expect(writes.join("")).toContain("Usage: deploykit [options] [command]");
     } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("lets bare deploy securely create the one-file configuration without legacy flags", async () => {
+    const root = await mkdtemp(join(tmpdir(), "deploykit-cli-config-"));
+    await execFileAsync("git", ["init", "--quiet", root]);
+    const previousDirectory = process.cwd();
+    const writes: string[] = [];
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      process.chdir(root);
+      await expect(main(["node", "deploykit", "deploy"])).resolves.toBeUndefined();
+      expect(writes.join("")).toContain("Created");
+      expect(writes.join("")).toContain("deploykit.config.yaml");
+      expect((await stat(join(root, "deploykit.config.yaml"))).mode & 0o777).toBe(0o600);
+      await expect(main(["node", "deploykit", "deploy"])).rejects.toMatchObject({
+        code: "DK_UNSUPPORTED",
+        message: expect.stringContaining("orchestrator is not implemented yet"),
+      });
+    } finally {
+      process.chdir(previousDirectory);
       write.mockRestore();
     }
   });

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Bare `deploykit deploy` now creates the bundled `deploykit.config.yaml` template securely instead of failing Commander validation for missing legacy `--target` and `--ref` flags.
+- The scaffold is create-exclusive, mode `0600`, repository-locally ignored, and rejects tracked, staged, symlinked, foreign-owned, or group/world-readable configuration files.
+- The full config parser and one-command GitHub/VPS orchestrator remain pending; existing v0.1 projects can temporarily use the explicitly labeled legacy flags.
+
 ## 0.1.2
 
 - Documentation only; the shipped CLI behaviour is unchanged from 0.1.1.

@@ -8,6 +8,7 @@ import prompts from "prompts";
 import { OpenAIAdvisorProvider, AnthropicAdvisorProvider, loadApprovedAdvisorFiles, requestManifestAdvice } from "./advisor/index.js";
 import { bootstrapServer, readSshFingerprint } from "./bootstrap.js";
 import { renderCliError } from "./cli-errors.js";
+import { scaffoldDeployConfig } from "./config-scaffold.js";
 import { DeployKitError } from "./errors.js";
 import { atomicWriteFile, writeIfAbsent } from "./fs.js";
 import { dispatchDeployment, inferGitHubRepository, validateApplicationRef } from "./github.js";
@@ -343,28 +344,70 @@ export function configureProgram(): Command {
     reporter(command).result("DK_SECRETS_OK", result);
   });
 
-  const addDispatch = (name: "deploy" | "retry", resume: boolean): void => {
-    program.command(name)
-      .description(resume ? "resume a failed first deployment" : "dispatch the first-deployment workflow")
-      .requiredOption("--target <name>")
-      .requiredOption("--ref <branch>")
-      .option("--repo <owner/name>")
-      .option("--dry-run")
-      .action(async (options: { target: string; ref: string; repo?: string; dryRun?: boolean }, command: Command) => {
-        const manifest = await manifestFor(command);
-        requireTarget(manifest, options.target);
-        const validation = await validateProject(manifest, { manifestPath: globals(command).manifest });
-        if (!validation.valid) {
-          throw new DeployKitError("DK_VALIDATION_FAILED", "Cannot dispatch an invalid project", { details: validation.issues });
-        }
-        validateApplicationRef(options.ref);
-        const repository = options.repo ?? await inferGitHubRepository();
-        const result = await dispatchDeployment({ repository, target: options.target, applicationRef: options.ref, resume, dryRun: options.dryRun });
-        reporter(command).result(resume ? "DK_RETRY_DISPATCHED" : "DK_DEPLOY_DISPATCHED", result);
-      });
+  const dispatchLegacy = async (
+    options: { target: string; ref: string; repo?: string; dryRun?: boolean },
+    command: Command,
+    resume: boolean,
+  ): Promise<void> => {
+    const manifest = await manifestFor(command);
+    requireTarget(manifest, options.target);
+    const validation = await validateProject(manifest, { manifestPath: globals(command).manifest });
+    if (!validation.valid) {
+      throw new DeployKitError("DK_VALIDATION_FAILED", "Cannot dispatch an invalid project", { details: validation.issues });
+    }
+    validateApplicationRef(options.ref);
+    const repository = options.repo ?? await inferGitHubRepository();
+    const result = await dispatchDeployment({ repository, target: options.target, applicationRef: options.ref, resume, dryRun: options.dryRun });
+    reporter(command).result(resume ? "DK_RETRY_DISPATCHED" : "DK_DEPLOY_DISPATCHED", result);
   };
-  addDispatch("deploy", false);
-  addDispatch("retry", true);
+
+  program.command("deploy")
+    .description("deploy from deploykit.config.yaml")
+    .option("--target <name>", "legacy deploykit.yaml target")
+    .option("--ref <branch>", "legacy application branch")
+    .option("--repo <owner/name>", "legacy GitHub repository")
+    .option("--dry-run", "legacy workflow dry run")
+    .action(async (options: { target?: string; ref?: string; repo?: string; dryRun?: boolean }, command: Command) => {
+      const legacyRequested = options.target !== undefined || options.ref !== undefined ||
+        options.repo !== undefined || options.dryRun === true;
+      if (!legacyRequested) {
+        const result = await scaffoldDeployConfig();
+        if (result.status === "created") {
+          const details = {
+            config: result.configPath,
+            next: "Fill in deploykit.config.yaml, then run deploykit deploy again",
+          };
+          reporter(command).result(
+            "DK_CONFIG_CREATED",
+            globals(command).json
+              ? details
+              : `Created ${result.configPath} with mode 0600.\nFill in that file, then run deploykit deploy again.`,
+          );
+          return;
+        }
+        throw new DeployKitError(
+          "DK_UNSUPPORTED",
+          "This build can create deploykit.config.yaml, but the one-command deployment orchestrator is not implemented yet. The legacy --target/--ref path remains available only for already initialized v0.1 projects.",
+        );
+      }
+      if (options.target === undefined || options.ref === undefined) {
+        throw new DeployKitError(
+          "DK_USAGE",
+          "Legacy deployment requires both --target <name> and --ref <branch>",
+        );
+      }
+      await dispatchLegacy({ ...options, target: options.target, ref: options.ref }, command, false);
+    });
+
+  program.command("retry")
+    .description("resume a failed legacy first deployment")
+    .requiredOption("--target <name>")
+    .requiredOption("--ref <branch>")
+    .option("--repo <owner/name>")
+    .option("--dry-run")
+    .action(async (options: { target: string; ref: string; repo?: string; dryRun?: boolean }, command: Command) => {
+      await dispatchLegacy(options, command, true);
+    });
 
   const inspectRemote = async (kind: "status" | "logs", targetName: string, manifest: ProjectManifest, tail?: number): Promise<unknown> => {
     const target = requireTarget(manifest, targetName);

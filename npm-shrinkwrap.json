@@ -1,12 +1,12 @@
 {
   "name": "@deploykit001/deploykit",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@deploykit001/deploykit",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "license": "MIT",
       "dependencies": {
         "@anthropic-ai/sdk": "0.65.0",

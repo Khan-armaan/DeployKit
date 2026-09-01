@@ -9,7 +9,7 @@ deploykit deploy
 DeployKit handles validation, GitHub Actions, protected variables and secrets, VPS provisioning, exact-commit source checkout, Docker Compose or PM2 services, static frontends, automatic ports, Nginx, TLS, health checks, and safe resume.
 
 > [!IMPORTANT]
-> The one-file workflow documented below is the required next-version interface. The current v0.1 CLI still reads `deploykit.yaml`, uses several low-level commands, and enrolls a self-hosted runner. It does **not** yet parse `deploykit.config.yaml` or perform the complete orchestration below. The documentation is intentionally explicit about this gap so the planned interface is not mistaken for released behavior.
+> The one-file workflow documented below is the required next-version interface. The current unreleased source can securely create `deploykit.config.yaml` from the bundled template, but it does **not** yet parse that file or perform the complete GitHub/VPS orchestration below. Released v0.1.2 still requires the legacy flags and self-hosted-runner setup. The documentation is intentionally explicit about this gap so planned behavior is not mistaken for released behavior.
 
 ## What the user needs
 
