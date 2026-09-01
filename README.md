@@ -18,7 +18,7 @@ DeployKit does not put an LLM in the production control path. The optional advis
 ## Install
 
 ```bash
-npm install --global deploykit
+npm install --global @deploykit001/deploykit
 deploykit --help
 ```
 
