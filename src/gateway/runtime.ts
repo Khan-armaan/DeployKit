@@ -47,10 +47,11 @@ import type {
  * belongs to the deterministic deployment engine, and everything identity-bound
  * comes from the root-owned binding rather than from the request.
  *
- * Source retrieval is injected. Phase 7 owns fetching the bound private
- * repository at the frozen commit, so an installation without a source provider
- * advertises only the non-mutating operations and refuses `apply` and `retry`
- * as an incomplete bootstrap instead of guessing where a tree came from.
+ * Source retrieval is injected rather than reached for. Phase 7 implements it
+ * in `./source.ts`, and the forced command installs that provider; an
+ * installation constructed without one advertises only the non-mutating
+ * operations and refuses `apply` and `retry` as an incomplete bootstrap instead
+ * of guessing where a tree came from.
  */
 
 export interface GatewaySourceRequest {
@@ -63,6 +64,8 @@ export interface GatewaySourceRequest {
 export interface GatewayRetrievedSource {
   /** Absolute root of the verified tree; never a DeployKit-owned runtime path. */
   readonly sourceDirectory: string;
+  /** True when an identical verified tree was already present for this commit. */
+  readonly reused?: boolean;
 }
 
 export interface GatewaySourcePort {
@@ -148,7 +151,7 @@ function gatewayPhaseCode(phase: string): string {
 }
 
 export interface GatewayRuntimeOptions {
-  /** Absent until Phase 7 installs a verified exact-SHA source provider. */
+  /** Absent only in an installation with no verified exact-SHA source provider. */
   readonly source?: GatewaySourcePort;
   readonly hostFacts?: () => Promise<GatewayHostFacts>;
   readonly roots?: ServerRoots;

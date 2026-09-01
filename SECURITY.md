@@ -4,6 +4,8 @@
 
 The released v0.1 architecture installs a repository-scoped GitHub Actions runner as root. The restricted-gateway model documented below is a **Phase 1 design contract**, not current production behavior. Until the gateway, bootstrap migration, hosted workflow, and disposable-VPS acceptance phases are complete, operators must follow the root-runner warning and controls in this document.
 
+The gateway protocol and its exact-SHA source retrieval are now implemented in the shipped code and covered by tests, but no bootstrap installs them: nothing in this package places a gateway user, binding, forced command, or repository key on a host yet. The pinned GitHub host keys those paths will use ship as the `assets/github-known-hosts` asset.
+
 ## Current v0.1 root-runner warning
 
 DeployKit v0.1 installs a repository-scoped GitHub Actions runner as root. This is not a sandbox. A workflow accepted by the runner, a Docker build, or a host package script can obtain full control of the VPS.

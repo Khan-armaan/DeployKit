@@ -6,6 +6,7 @@ import { readGatewayBinding } from "./binding.js";
 import { protocolError } from "./failures.js";
 import type { GatewayInvocation } from "./invocation.js";
 import { createGatewayOperations, type GatewaySourcePort } from "./runtime.js";
+import { createGitSourceProvider } from "./source.js";
 import { runGatewaySession, type GatewayOperations, type GatewaySessionResult } from "./session.js";
 
 /**
@@ -47,7 +48,7 @@ export interface RunGatewayCommandOptions {
   readonly stdoutIsTty?: boolean;
   readonly roots?: ServerRoots;
   readonly now?: () => Date;
-  /** Phase 7 supplies the verified exact-SHA source provider. */
+  /** Overrides the verified exact-SHA source provider the gateway installs. */
   readonly source?: GatewaySourcePort;
   /** Overridden only by tests; production always reads the root-owned binding. */
   readonly operations?: GatewayOperations;
@@ -69,7 +70,8 @@ export async function runGatewayCommand(
   const result = await runGatewaySession(() => readBoundedInput(stdin), {
     operations: options.operations ??
       createGatewayOperations({
-        ...(options.source === undefined ? {} : { source: options.source }),
+        source: options.source ??
+          createGitSourceProvider({ ...(options.roots === undefined ? {} : { roots: options.roots }) }),
         ...(options.roots === undefined ? {} : { roots: options.roots }),
       }),
     readBinding: options.readBinding ??

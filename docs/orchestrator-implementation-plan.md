@@ -273,6 +273,12 @@ Completion gate:
 - Source retrieval cannot create a release, reserve a port/domain, start a workload, write Nginx, issue TLS, or activate anything.
 - Repeated retrieval of the same repository/SHA is deterministic and ownership-safe.
 
+Delivered by: `src/gateway/source.ts` (the exact-SHA provider, its bounded Git environment and hardening flags, the root-owned fetch area, and the cache/tree identity markers), `src/gateway/source-tree.ts` (the pre-promotion walk that refuses `.git` paths, submodule declarations, escaping symlinks, and special files), `src/gateway/github-known-hosts.ts` with the `assets/github-known-hosts` package asset (the pinned GitHub host keys), the provider now wired into `deploykit gateway` by `src/gateway/command.ts`, and `test/gateway-source.test.ts`.
+
+Retrieval fetches into `/var/lib/deploykit/source/<target-id>/`, which overlaps neither the immutable releases, nor the activated release link, nor the target's configuration and state directories, so `assertIncomingSourceRoot` accepts the tree it hands to the deployment engine. The SSH URL is derived only from the root-owned binding; the request may name a ref and a commit but never a repository. Git runs with a constructed environment — `GIT_CONFIG_COUNT=0` neutralizes inherited `GIT_CONFIG_KEY_n` injection, global and system configuration are `/dev/null`, prompts and askpass are disabled, the agent, proxies, and loader variables are removed, and `GIT_SSH_COMMAND` pins `StrictHostKeyChecking=yes` against the pinned keys with the read-only repository identity and `IdentitiesOnly=yes` — plus per-invocation `-c` flags that disable hooks, credential helpers, submodule recursion, and every transport but the one this remote uses.
+
+Identity is proven in order and nothing is materialized before it holds: `ls-remote` resolves the ref without downloading, a ref that names no commit is `DK_REF_NOT_FOUND` and one that no longer points at the frozen commit is `DK_REF_MOVED`; the shallow fetch runs with object checking on, so a pack carrying a `.git` path is refused as `DK_SOURCE_UNSAFE` rather than as a transport error; the frozen object must be a commit and the fetched tip must be exactly it. Gitlinks and submodule declarations are refused from the object database, the checkout runs with a fresh index into a private staging directory, the tree is walked before it is promoted, and the promotion is a rename. A tree already recorded for the same repository, target, and commit is reused, and trees for other commits are pruned, so a retry is cheap and deterministic.
+
 ### Phase 8 — VPS bootstrap and crash-safe key lifecycle
 
 Depends on: Phase 7 complete.
@@ -481,7 +487,7 @@ Completion gate:
 | 4 | Orchestrator core with fakes | Complete |
 | 5 | Server runtime foundation | Complete |
 | 6 | Gateway protocol/server command | Complete |
-| 7 | Exact-SHA source provider | Planned |
+| 7 | Exact-SHA source provider | Complete |
 | 8 | VPS bootstrap/key lifecycle | Planned |
 | 9 | GitHub client primitives | Planned |
 | 10 | Control artifacts/setup PR | Planned |
