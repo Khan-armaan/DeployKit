@@ -62,6 +62,13 @@ export interface ProcessCommandRunnerOptions {
   readonly dryRun?: boolean;
   readonly redactor?: SecretRedactor;
   readonly maxOutputBytes?: number;
+  /**
+   * The environment every child starts from, before a spec's own overrides.
+   * The legacy runner path inherits this process's environment; the restricted
+   * gateway passes a minimal one instead, so nothing an SSH client managed to
+   * set can reach a deployment command.
+   */
+  readonly baseEnvironment?: Readonly<Record<string, string | undefined>>;
 }
 
 /** Executes an executable with an argv array. It never invokes a shell. */
@@ -70,11 +77,13 @@ export class ProcessCommandRunner implements CommandRunner {
   private readonly dryRun: boolean;
   private readonly redactor?: SecretRedactor;
   private readonly maxOutputBytes: number;
+  private readonly baseEnvironment: Readonly<Record<string, string | undefined>>;
 
   constructor(options: ProcessCommandRunnerOptions = {}) {
     this.dryRun = options.dryRun ?? false;
     this.redactor = options.redactor;
     this.maxOutputBytes = options.maxOutputBytes ?? 10 * 1024 * 1024;
+    this.baseEnvironment = options.baseEnvironment ?? process.env;
   }
 
   async run(spec: CommandSpec): Promise<CommandResult> {
@@ -85,7 +94,7 @@ export class ProcessCommandRunner implements CommandRunner {
     }
 
     return await new Promise<CommandResult>((resolve, reject) => {
-      const environment: NodeJS.ProcessEnv = { ...process.env };
+      const environment: NodeJS.ProcessEnv = { ...this.baseEnvironment };
       for (const [key, value] of Object.entries(spec.env ?? {})) {
         if (value === undefined) delete environment[key];
         else environment[key] = value;

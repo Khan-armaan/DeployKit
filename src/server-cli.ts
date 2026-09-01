@@ -2,6 +2,7 @@ import { Command, CommanderError, InvalidArgumentError } from "commander";
 
 import { renderCliError } from "./cli-errors.js";
 import { DeployKitError } from "./errors.js";
+import { runGatewayCommand } from "./gateway/command.js";
 import { Reporter } from "./output.js";
 import { runServerApply } from "./server-runtime.js";
 import { readServerTargetLogs, inspectServerTarget } from "./server-inspect.js";
@@ -52,7 +53,16 @@ function integerOption(value: string): number {
   return number;
 }
 
-export function configureServerProgram(): Command {
+/**
+ * The gateway command owns its own exit code because it never raises a CLI
+ * error: every outcome is a result frame on stdout. The holder carries that
+ * code back out of Commander's action handler.
+ */
+export interface ServerCliOutcome {
+  exitCode?: number;
+}
+
+export function configureServerProgram(outcome: ServerCliOutcome = {}): Command {
   const program = new Command()
     .name("deploykit")
     .description("DeployKit deterministic VPS runtime")
@@ -62,6 +72,17 @@ export function configureServerProgram(): Command {
     .option("--verbose", "show diagnostic details");
   program.exitOverride();
   program.configureOutput({ writeErr: () => undefined });
+
+  // The restricted gateway is a top-level command because it is the exact
+  // string an `authorized_keys` forced command runs: `deploykit gateway`. It
+  // takes no options and no arguments, reads one bounded canonical request
+  // stream from stdin, and writes only JSON Lines frames to stdout.
+  program.command("gateway")
+    .description("serve one restricted gateway request from stdin")
+    .allowExcessArguments(false)
+    .action(async (_options: unknown, command: Command) => {
+      outcome.exitCode = (await runGatewayCommand({ argv: command.args })).exitCode;
+    });
 
   const server = program.command("server").description("execute the enrolled VPS runtime");
   server.command("apply")
@@ -128,14 +149,15 @@ export function configureServerProgram(): Command {
 }
 
 export async function runServerCli(argv = process.argv, stderr: NodeJS.WritableStream = process.stderr): Promise<number> {
-  const program = configureServerProgram();
+  const outcome: ServerCliOutcome = {};
+  const program = configureServerProgram(outcome);
   try {
     if (argv.length <= 2) {
       program.outputHelp();
       return 0;
     }
     await program.parseAsync(argv);
-    return 0;
+    return outcome.exitCode ?? 0;
   } catch (error) {
     const normalized = error instanceof CommanderError && error.exitCode !== 0
       ? new DeployKitError("DK_USAGE", error.message.replace(/^error:\s*/u, ""), { cause: error })

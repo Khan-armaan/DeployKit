@@ -224,7 +224,9 @@ describe("deployment identity binding", () => {
       // skips every phase that already has a durable checkpoint.
       expect(driver.calls).toEqual(DEPLOYMENT_PHASES.slice(DEPLOYMENT_PHASES.indexOf(phase), -1));
     }
-  });
+    // Seven full interrupt-and-resume cycles, each taking real file locks; the
+    // default five-second budget is not enough once the suite runs in parallel.
+  }, 60_000);
 
   it("treats a running record as interrupted only under the server-wide deployment lock", async () => {
     const fixture = await harness();

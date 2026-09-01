@@ -12,6 +12,13 @@ export type DeploymentEventCode =
   | "SERVER_DEPLOYMENT_FAILED"
   | "SERVER_DEPLOYMENT_SUCCEEDED";
 
+/**
+ * A synchronous observer of durable deployment events. The restricted gateway
+ * uses it to turn the runtime's own phase transitions into bounded progress
+ * frames without reading back the log it just wrote.
+ */
+export type DeploymentEventObserver = (event: DeploymentEvent) => void;
+
 export interface DeploymentEvent {
   readonly time: string;
   readonly level: "info" | "error";
@@ -28,6 +35,7 @@ export class DeploymentEventLogger {
     private readonly targetId: string,
     private readonly redactor: SecretRedactor,
     private readonly now: () => Date = () => new Date(),
+    private readonly observe?: DeploymentEventObserver,
   ) {}
 
   async write(
@@ -46,6 +54,7 @@ export class DeploymentEventLogger {
       message: this.redactor.redactText(message),
       ...(data === undefined ? {} : { data: this.redactor.redact(data) }),
     };
+    this.observe?.(event);
     await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
     await appendFile(this.file, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
     await chmod(this.file, 0o600);

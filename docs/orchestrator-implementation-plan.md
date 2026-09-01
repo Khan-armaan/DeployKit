@@ -243,6 +243,14 @@ Completion gate:
 - Secret canaries are absent from stdout, stderr, errors, state, and events.
 - The gateway is not installed remotely yet.
 
+Delivered by: `src/gateway/protocol.ts` (the canonical JSON Lines codec, every frozen bound, and both the request and output stream parsers), `src/gateway/runtime-manifest.ts` (the strict `deploykit/runtime/v1alpha1` schema plus the canonical round-trip check), `src/gateway/binding.ts` (the `O_NOFOLLOW` root-owned binding read and confirm-only comparison), `src/gateway/invocation.ts` (the forced-command guard and minimal child environment), `src/gateway/session.ts` (one bounded, redacted session per request), `src/gateway/runtime.ts` (the production operations over the existing deployment engine), `src/gateway/command.ts` and the `deploykit gateway` command on the standalone server CLI, and `test/gateway-protocol.test.ts`.
+
+The parser believes nothing. It recomputes the manifest digest from the received bytes, refuses a manifest whose canonical re-serialization is not byte-identical to what arrived, compares the declared frame counts and payload lengths with the frames that actually appeared, and checks every secret name against the names the manifest declares. Identity is never chosen by the caller: the root-owned binding supplies the repository, Environment, target name, and target ID, and a request or manifest that names anything else is refused as a binding mismatch rather than a protocol error. The forced command refuses a client-supplied command, arguments, a PTY, agent forwarding, and X11 forwarding *before* it reads a byte of stdin, and every deployment command it later spawns starts from a minimal environment with `shell: false`.
+
+A session never throws: hostile input, an unconfirmed binding, a runtime refusal, and an unexpected exception all become a bounded failure result frame carrying a frozen `DK_*` code, its recovery action, and the matching process exit code. The result frame deliberately has no free-form message field, and every secret value received in the request is registered with a redactor — in both its raw and its JSON-escaped form — before any output is produced.
+
+Source retrieval is injected because Phase 7 owns it. An installation without a verified source provider advertises only the non-mutating capabilities in its handshake and refuses `apply` and `retry` as an incomplete bootstrap, so no placeholder retrieval ships. Supporting changes to existing modules: `DeploymentEventLogger` and `DeploymentApplier` accept an optional observer so the runtime's own phase transitions become progress frames without reading back the log, and `ProcessCommandRunner` accepts an explicit base environment. The gateway is installed on no host; Phase 8 owns the binding, host facts, bundle, and forced-command entry it reads.
+
 ### Phase 7 — Exact-SHA private source provider
 
 Depends on: Phase 6 complete.
@@ -472,7 +480,7 @@ Completion gate:
 | 3 | Compiler and project validation | Complete |
 | 4 | Orchestrator core with fakes | Complete |
 | 5 | Server runtime foundation | Complete |
-| 6 | Gateway protocol/server command | Planned |
+| 6 | Gateway protocol/server command | Complete |
 | 7 | Exact-SHA source provider | Planned |
 | 8 | VPS bootstrap/key lifecycle | Planned |
 | 9 | GitHub client primitives | Planned |

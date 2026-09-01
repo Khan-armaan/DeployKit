@@ -8,7 +8,7 @@ import type {
   ManifestDigest,
 } from "../orchestrator/contracts.js";
 import { ServerError, isServerError } from "./errors.js";
-import { DeploymentEventLogger } from "./events.js";
+import { DeploymentEventLogger, type DeploymentEventObserver } from "./events.js";
 import { assertCommitSha, assertSafeId, makeServiceKey, makeTargetId } from "./ids.js";
 import { makeDeploymentIdentity } from "./identity.js";
 import { buildInspection, type ServerInspectionResult } from "./inspect.js";
@@ -279,6 +279,8 @@ export interface DeploymentApplierOptions {
   readonly driver: DeploymentDriver;
   readonly redactor: SecretRedactor;
   readonly now?: () => Date;
+  /** Receives every durable deployment event as it is recorded. */
+  readonly observe?: DeploymentEventObserver;
 }
 
 export interface DeploymentApplyResult {
@@ -427,6 +429,7 @@ export class DeploymentApplier {
       plan.targetId,
       this.options.redactor,
       this.options.now,
+      this.options.observe,
     );
     const releaseDirectory = plan.paths.releaseDirectory(plan.commitSha);
 
