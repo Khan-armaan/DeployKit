@@ -1,0 +1,331 @@
+{
+  "apiVersion": "deploykit/failure-expectations/v1alpha1",
+  "comment": "Every fixture listed here must be rejected with exactly this frozen DK_* code and recovery action. Phase 1 adds no parser; later phases must satisfy these expectations.",
+  "canaries": [
+    "DK_CANARY_CERTBOT_EMAIL_5f3a1c",
+    "DK_CANARY_DATABASE_URL_9b2e74",
+    "DK_CANARY_POSTGRES_PASSWORD_c481ad",
+    "DK_CANARY_UNDECLARED_TOKEN_7e11f0",
+    "DK_CANARY_LONG_NAME_2c9d55"
+  ],
+  "canaryBearingFixtures": [
+    "ownership/invalid/secret-value-in-marker.json",
+    "protocol/invalid/declared-frame-count-mismatch.jsonl",
+    "protocol/invalid/duplicate-secret-name.jsonl",
+    "protocol/invalid/noncanonical-key-order.jsonl",
+    "protocol/invalid/oversized-request-frame.jsonl",
+    "protocol/invalid/secret-name-too-long.jsonl",
+    "protocol/invalid/trailing-frame.jsonl",
+    "protocol/invalid/truncated-stream.jsonl",
+    "protocol/invalid/undeclared-secret.jsonl",
+    "protocol/invalid/unknown-frame-key.jsonl",
+    "protocol/invalid/unknown-operation.jsonl",
+    "protocol/invalid/unsupported-protocol-version.jsonl",
+    "protocol/valid/apply.jsonl",
+    "protocol/valid/retry.jsonl",
+    "state/invalid/operation-record-with-secret.json"
+  ],
+  "cases": [
+    {
+      "fixture": "config/invalid/ambiguous-routes.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "two routes declare the same hostname, match, and path"
+    },
+    {
+      "fixture": "config/invalid/duplicate-environment-name.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "DATABASE_URL is declared both as a backend value and as a generated name"
+    },
+    {
+      "fixture": "config/invalid/escaping-working-directory.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "a workload working directory escapes the application repository root"
+    },
+    {
+      "fixture": "config/invalid/invalid-host-key-fingerprint.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "the pinned VPS host key is not a SHA256 fingerprint"
+    },
+    {
+      "fixture": "config/invalid/invalid-ref.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "the requested ref contains a path traversal segment"
+    },
+    {
+      "fixture": "config/invalid/non-string-environment-value.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "a frontend environment value is a number instead of a string"
+    },
+    {
+      "fixture": "config/invalid/placeholder-values.yaml",
+      "code": "DK_CONFIG_PLACEHOLDER",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "the bundled example placeholders were never replaced with real values"
+    },
+    {
+      "fixture": "config/invalid/reserved-deploykit-key.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "a backend value uses the reserved DEPLOYKIT_ prefix"
+    },
+    {
+      "fixture": "config/invalid/secret-like-frontend-name.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "a public static-frontend variable is named like a secret and would be embedded in built assets"
+    },
+    {
+      "fixture": "config/invalid/unknown-key.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "an unknown top-level key is present and strict parsing rejects unknown fields"
+    },
+    {
+      "fixture": "config/invalid/unresolved-route-target.yaml",
+      "code": "DK_CONFIG_INVALID",
+      "recovery": "edit-config-and-rerun",
+      "boundary": "config-schema",
+      "violation": "a route targets a workload name that no service declares"
+    },
+    {
+      "fixture": "ownership/invalid/claims-application-file.json",
+      "code": "DK_OWNERSHIP_CONFLICT",
+      "recovery": "resolve-ownership-conflict",
+      "boundary": "control-artifacts",
+      "violation": "the marker claims an application-owned file outside the three managed paths"
+    },
+    {
+      "fixture": "ownership/invalid/foreign-owner.json",
+      "code": "DK_OWNERSHIP_CONFLICT",
+      "recovery": "resolve-ownership-conflict",
+      "boundary": "control-artifacts",
+      "violation": "the marker at a DeployKit-managed path is owned by another tool"
+    },
+    {
+      "fixture": "ownership/invalid/secret-value-in-marker.json",
+      "code": "DK_CONTROL_ARTIFACTS_DRIFTED",
+      "recovery": "rerun-same-command",
+      "boundary": "control-artifacts",
+      "violation": "the secret-free marker carries a secret value instead of a secret name"
+    },
+    {
+      "fixture": "ownership/invalid/target-id-mismatch.json",
+      "code": "DK_OWNERSHIP_CONFLICT",
+      "recovery": "resolve-ownership-conflict",
+      "boundary": "control-artifacts",
+      "violation": "the marker binds the managed files to a different target ID"
+    },
+    {
+      "fixture": "ownership/invalid/workflow-digest-drift.json",
+      "code": "DK_CONTROL_ARTIFACTS_DRIFTED",
+      "recovery": "rerun-same-command",
+      "boundary": "control-artifacts",
+      "violation": "the recorded workflow digest no longer matches the default-branch workflow bytes"
+    },
+    {
+      "fixture": "protocol/invalid/binding-substitution.jsonl",
+      "code": "DK_GATEWAY_BINDING_MISMATCH",
+      "recovery": "resolve-ownership-conflict",
+      "boundary": "gateway-protocol",
+      "violation": "caller supplies a repository and target ID that the root-owned binding does not name"
+    },
+    {
+      "fixture": "protocol/invalid/byte-length-mismatch.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "manifest byteLength disagrees with the decoded payload length"
+    },
+    {
+      "fixture": "protocol/invalid/declared-frame-count-mismatch.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "fewer secret frames arrive than expectedPayload and the end frame declare"
+    },
+    {
+      "fixture": "protocol/invalid/duplicate-secret-name.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "CERTBOT_EMAIL is sent twice in one stream"
+    },
+    {
+      "fixture": "protocol/invalid/handshake-with-payload.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "a non-mutating handshake declares and sends manifest payload"
+    },
+    {
+      "fixture": "protocol/invalid/invalid-commit-sha.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "commitSha is not a lower-case 40-character hexadecimal Git SHA"
+    },
+    {
+      "fixture": "protocol/invalid/invalid-request-id.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "requestId is not a version 1-8 UUID"
+    },
+    {
+      "fixture": "protocol/invalid/malformed-json.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "first line is truncated and is not parsable JSON"
+    },
+    {
+      "fixture": "protocol/invalid/manifest-digest-mismatch.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "claimed digest does not match the SHA-256 of the received canonical manifest bytes"
+    },
+    {
+      "fixture": "protocol/invalid/noncanonical-base64.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "manifest payload uses noncanonical base64 padding"
+    },
+    {
+      "fixture": "protocol/invalid/noncanonical-key-order.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "request frame keys are not in frozen contract order"
+    },
+    {
+      "fixture": "protocol/invalid/oversized-request-frame.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "request frame exceeds maxRequestFrameBytes"
+    },
+    {
+      "fixture": "protocol/invalid/progress-sequence-regression.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "output sequence numbers are not strictly increasing"
+    },
+    {
+      "fixture": "protocol/invalid/request-id-mismatch.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "manifest frame carries a different request UUID than the request frame"
+    },
+    {
+      "fixture": "protocol/invalid/secret-name-too-long.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "secret name exceeds maxSecretNameBytes"
+    },
+    {
+      "fixture": "protocol/invalid/trailing-frame.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "a secret frame follows the end frame"
+    },
+    {
+      "fixture": "protocol/invalid/truncated-stream.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "stream ends without an end frame"
+    },
+    {
+      "fixture": "protocol/invalid/undeclared-secret.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "a secret frame carries a name the runtime manifest never declares"
+    },
+    {
+      "fixture": "protocol/invalid/unknown-frame-key.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "request frame carries a key outside the frozen contract"
+    },
+    {
+      "fixture": "protocol/invalid/unknown-operation.jsonl",
+      "code": "DK_GATEWAY_PROTOCOL_INVALID",
+      "recovery": "not-resumable",
+      "boundary": "gateway-protocol",
+      "violation": "operation is not one of the four exposed operations"
+    },
+    {
+      "fixture": "protocol/invalid/unsupported-protocol-version.jsonl",
+      "code": "DK_GATEWAY_VERSION_MISMATCH",
+      "recovery": "rerun-same-command",
+      "boundary": "gateway-protocol",
+      "violation": "request frame declares a protocol version the gateway does not implement"
+    },
+    {
+      "fixture": "state/invalid/commit-sha-mismatch.json",
+      "code": "DK_IDENTITY_MISMATCH",
+      "recovery": "restore-same-sha-and-digest",
+      "boundary": "deployment-identity",
+      "violation": "retry identity names a different commit SHA than the recorded failed deployment"
+    },
+    {
+      "fixture": "state/invalid/completed-reapply.json",
+      "code": "DK_ALREADY_DEPLOYED",
+      "recovery": "not-resumable",
+      "boundary": "deployment-identity",
+      "violation": "the target already completed its first deployment and refuses every further apply"
+    },
+    {
+      "fixture": "state/invalid/legacy-no-digest.json",
+      "code": "DK_STATE_LEGACY",
+      "recovery": "migrate-legacy-state",
+      "boundary": "deployment-identity",
+      "violation": "failed pre-digest state cannot be bound to a commit SHA or manifest digest"
+    },
+    {
+      "fixture": "state/invalid/manifest-digest-mismatch.json",
+      "code": "DK_IDENTITY_MISMATCH",
+      "recovery": "restore-same-sha-and-digest",
+      "boundary": "deployment-identity",
+      "violation": "retry identity names a different manifest digest than the recorded failed deployment"
+    },
+    {
+      "fixture": "state/invalid/operation-record-unknown-status.json",
+      "code": "DK_OPERATION_STATE_INVALID",
+      "recovery": "rerun-same-command",
+      "boundary": "operation-state",
+      "violation": "status is outside the frozen local operation status union"
+    },
+    {
+      "fixture": "state/invalid/operation-record-with-secret.json",
+      "code": "DK_OPERATION_STATE_INVALID",
+      "recovery": "rerun-same-command",
+      "boundary": "operation-state",
+      "violation": "the secret-free local record carries a backend secret value and an undeclared key"
+    }
+  ]
+}

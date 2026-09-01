@@ -1,0 +1,16 @@
+{
+  "apiVersion": "deploykit/gateway-binding/v1alpha1",
+  "bindingId": "13a5ce1e444db74a784f1c1e9c205703",
+  "repository": "deploykit-fixtures/static-compose",
+  "githubEnvironment": "fixture-static-production",
+  "targetName": "production",
+  "targetId": "04809ce707a77a199e6b989440139ba0",
+  "gatewayUser": "deploykit-gateway",
+  "forcedCommand": "deploykit gateway",
+  "runtimeVersion": "0.1.3",
+  "runtimeBundleSha256": "4d6d152facae078ff01608c5deb012c4918c88f8b3c0cd67ffbeae780014069c",
+  "repositoryKeyId": "deploykit-repository-static-production",
+  "repositoryKeyFingerprint": "SHA256:Rk1lbEMwbnRyYWN0Rml4dHVyZUtleUZpbmdlcnByaW50MDE",
+  "activeGatewayKeyId": "deploykit-gateway-static-production-1",
+  "pendingGatewayKeyId": null
+}

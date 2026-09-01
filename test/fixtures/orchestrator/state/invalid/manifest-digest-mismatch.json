@@ -1,0 +1,12 @@
+{
+  "apiVersion": "deploykit/deployment-identity/v1alpha1",
+  "targetId": "04809ce707a77a199e6b989440139ba0",
+  "commitSha": "3f0a1b2c4d5e6f708192a3b4c5d6e7f809a1b2c3",
+  "manifestDigest": {
+    "apiVersion": "deploykit/digest/v1alpha1",
+    "algorithm": "sha256",
+    "encoding": "hex",
+    "canonicalization": "deploykit/runtime-yaml-canonical/v1",
+    "value": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}

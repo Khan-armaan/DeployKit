@@ -1,0 +1,7 @@
+{
+  "name": "fixture-container-api",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  }
+}

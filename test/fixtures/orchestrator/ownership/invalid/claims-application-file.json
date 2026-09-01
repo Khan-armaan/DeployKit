@@ -1,0 +1,47 @@
+{
+  "apiVersion": "deploykit/github-ownership/v1alpha1",
+  "owner": "deploykit",
+  "repository": "deploykit-fixtures/static-compose",
+  "targetName": "production",
+  "targetId": "04809ce707a77a199e6b989440139ba0",
+  "githubEnvironment": "fixture-static-production",
+  "managed": {
+    "names": {
+      "workflowPath": ".github/workflows/deploykit.yml",
+      "runtimeManifestPath": ".github/deploykit/manifest.yaml",
+      "ownershipPath": ".github/deploykit/ownership.json",
+      "setupBranch": "deploykit/setup-04809ce707a7",
+      "setupPullRequestTitle": "DeployKit setup: static-compose production",
+      "repositoryDeployKeyTitle": "DeployKit repository key: static-compose production",
+      "gatewayPrivateKeySecret": "DEPLOYKIT_GATEWAY_PRIVATE_KEY",
+      "gatewayHostVariable": "DEPLOYKIT_GATEWAY_HOST",
+      "gatewayPortVariable": "DEPLOYKIT_GATEWAY_PORT",
+      "gatewayUserVariable": "DEPLOYKIT_GATEWAY_USER",
+      "gatewayKnownHostsVariable": "DEPLOYKIT_GATEWAY_KNOWN_HOSTS",
+      "targetIdVariable": "DEPLOYKIT_TARGET_ID"
+    },
+    "files": [
+      ".github/workflows/deploykit.yml",
+      "src/index.ts",
+      ".github/deploykit/ownership.json"
+    ],
+    "frontendVariables": [
+      "VITE_API_BASE_URL"
+    ],
+    "backendSecrets": [
+      "CERTBOT_EMAIL"
+    ],
+    "generatedSecrets": [
+      "DATABASE_URL",
+      "POSTGRES_PASSWORD"
+    ]
+  },
+  "workflowDigest": "0881126d63a65c66db9de012e02ef6965c6fec3ddd03a408f8015bb0b71641ff",
+  "runtimeManifestDigest": {
+    "apiVersion": "deploykit/digest/v1alpha1",
+    "algorithm": "sha256",
+    "encoding": "hex",
+    "canonicalization": "deploykit/runtime-yaml-canonical/v1",
+    "value": "e1c4761107ba005371e9dbe43c39629c6edda6ff7f7c5bc96905ae7b847d524a"
+  }
+}

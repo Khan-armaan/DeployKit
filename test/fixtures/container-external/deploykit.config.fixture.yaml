@@ -1,0 +1,69 @@
+apiVersion: deploykit/config/v1alpha1
+kind: Deployment
+
+project:
+  name: container-external
+  repository: deploykit-fixtures/container-external
+  ref: main
+
+target:
+  name: production
+  githubEnvironment: fixture-container-production
+  primaryDomain: container.example.test
+  aliases: []
+
+server:
+  host: vps.container.example.test
+  user: ubuntu
+  port: 22
+  identityFile: /home/deploykit-fixture/.ssh/container-production
+  hostKeyFingerprint: SHA256:UNIAoa+KLEBb6p6GBnElXDPuOuRjMtkdc9AnE04D1xg
+  configureFirewall: false
+
+compose:
+  files:
+    - compose.yaml
+
+services:
+  api:
+    type: compose
+    service: api
+    internalPort: 4000
+    hostPort: auto
+    healthCheck:
+      type: http
+      path: /health
+  web:
+    type: compose
+    service: web
+    internalPort: 8080
+    hostPort: auto
+    healthCheck:
+      type: http
+      path: /
+
+frontend:
+  type: service
+  service: web
+
+routes:
+  - hostname: "@primary"
+    path: /api/
+    match: prefix
+    target: api
+    preservePrefix: true
+
+database:
+  type: external
+  connectionStringSecret: DATABASE_URL
+  tlsCaSecret: DATABASE_CA
+  requireTls: true
+
+environment:
+  frontend:
+    PUBLIC_API_BASE_URL: "/api"
+  backend:
+    CERTBOT_EMAIL: "container-fixture-ops@container.example.test"
+    DATABASE_URL: "postgresql://fixture_user:not-a-real-password@database.example.test:5432/fixture_app"
+    DATABASE_CA: "fixture-only-ca-certificate-material"
+  generated: []

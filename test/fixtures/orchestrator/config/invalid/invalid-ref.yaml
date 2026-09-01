@@ -1,0 +1,94 @@
+apiVersion: deploykit/config/v1alpha1
+kind: Deployment
+
+project:
+  name: static-compose
+  repository: deploykit-fixtures/static-compose
+  ref: refs/heads/../evil
+
+target:
+  name: production
+  githubEnvironment: fixture-static-production
+  primaryDomain: static.example.test
+  aliases:
+    - www.static.example.test
+
+server:
+  host: vps.static.example.test
+  user: ubuntu
+  port: 22
+  identityFile: /home/deploykit-fixture/.ssh/static-production
+  hostKeyFingerprint: SHA256:d0OhqaT54RQfWpZgR4SUpVx/ZFUMNXdYDdi5RlPALiI
+  configureFirewall: false
+
+compose:
+  files:
+    - compose.yaml
+
+services:
+  api:
+    type: compose
+    service: api
+    internalPort: 3000
+    hostPort: auto
+    healthCheck:
+      type: http
+      path: /health
+      expectedStatuses:
+        - 200
+
+frontend:
+  type: static
+  workingDirectory: frontend
+  nodeVersion: 22.18.0
+  packageManager: npm
+  installCommand:
+    - npm
+    - ci
+  buildScript: build
+  outputDirectory: dist
+  spaFallback: true
+
+routes:
+  - hostname: "@primary"
+    path: /api/upload
+    match: exact
+    target: api
+    preservePrefix: true
+    requestBuffering: false
+    uploadLimit: 25m
+  - hostname: "@primary"
+    path: /api/
+    match: prefix
+    target: api
+    preservePrefix: true
+    websocket: true
+
+database:
+  type: compose
+  service: postgres
+  internalPort: 5432
+  consumers:
+    - api
+  volume: postgres-data
+  credentials:
+    username: fixture_app
+    database: fixture_app
+    passwordSecret: POSTGRES_PASSWORD
+    connectionStringSecret: DATABASE_URL
+    connectionStringTemplate: postgresql://{username}:{password}@{host}:{port}/{database}
+  migrations:
+    service: api
+    command:
+      - npm
+      - run
+      - migrate
+
+environment:
+  frontend:
+    VITE_API_BASE_URL: "/api"
+  backend:
+    CERTBOT_EMAIL: "static-fixture-ops@static.example.test"
+  generated:
+    - DATABASE_URL
+    - POSTGRES_PASSWORD
