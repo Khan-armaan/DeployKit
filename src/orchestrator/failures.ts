@@ -1,4 +1,4 @@
-import type { ErrorCode, OrchestratorErrorCode } from "../errors.js";
+import { DeployKitError, type ErrorCode, type OrchestratorErrorCode } from "../errors.js";
 
 import type { RecoveryAction } from "./contracts.js";
 
@@ -392,4 +392,41 @@ export function failuresForBoundary(
   boundary: OrchestratorBoundary,
 ): readonly OrchestratorFailureContract[] {
   return FAILURE_CONTRACTS.filter((entry) => entry.boundary === boundary);
+}
+
+/** Recovery metadata attached to every orchestrator failure envelope. */
+export interface FailureRecoveryDetails {
+  readonly boundary: OrchestratorBoundary;
+  readonly recovery: RecoveryAction;
+  readonly resume: string;
+  readonly mutation: MutationBoundary;
+}
+
+export function failureRecoveryDetails(code: ErrorCode): FailureRecoveryDetails | undefined {
+  const contract = failureContract(code);
+  if (contract === undefined) return undefined;
+  return {
+    boundary: contract.boundary,
+    recovery: contract.recovery,
+    resume: RECOVERY_INSTRUCTIONS[contract.recovery],
+    mutation: contract.mutationBoundary,
+  };
+}
+
+/**
+ * Raises a boundary failure with its frozen recovery instruction attached, so
+ * every orchestrator error tells the operator exactly how to resume. Callers
+ * must pass only secret-free details.
+ */
+export function orchestratorError(
+  code: ErrorCode,
+  message: string,
+  options: { cause?: unknown; details?: Record<string, unknown> } = {},
+): DeployKitError {
+  const recovery = failureRecoveryDetails(code);
+  const details = { ...recovery, ...options.details };
+  return new DeployKitError(code, message, {
+    cause: options.cause,
+    details: Object.keys(details).length > 0 ? details : undefined,
+  });
 }

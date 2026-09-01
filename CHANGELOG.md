@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Orchestrator Phase 2: bare `deploykit deploy` now scaffolds, securely reads, and strictly validates `deploykit.config.yaml` before doing anything else, and reports stable `DK_CONFIG_SCAFFOLDED`, `DK_CONFIG_INSECURE`, `DK_CONFIG_PLACEHOLDER`, and `DK_CONFIG_INVALID` failures with their frozen recovery instructions.
+- Secure read opens the file with `O_NOFOLLOW` and validates the opened descriptor: regular file, current-user owned, mode `0600` exactly, size-bounded, and untracked, unstaged, and Git-ignored inside the repository. Linked Git worktrees share the main checkout's exclude file.
+- Expanded `assets/deploykit.config.example.yaml` with Compose, PM2 (including a worker), static and service frontends, routing, health checks, automatic ports, a database block, and generated-secret names.
+- Operator backend values are partitioned out immediately after parsing and registered with an exact-value redactor, so they cannot reach JSON output, error details, or logs.
+- The config parser and one-command GitHub/VPS orchestrator remain incomplete past this boundary; existing v0.1 projects can still use the explicitly labeled legacy flags.
+
 ## 0.1.3
 
 - Bare `deploykit deploy` now creates the bundled `deploykit.config.yaml` template securely instead of failing Commander validation for missing legacy `--target` and `--ref` flags.

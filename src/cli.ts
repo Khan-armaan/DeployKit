@@ -8,7 +8,7 @@ import prompts from "prompts";
 import { OpenAIAdvisorProvider, AnthropicAdvisorProvider, loadApprovedAdvisorFiles, requestManifestAdvice } from "./advisor/index.js";
 import { bootstrapServer, readSshFingerprint } from "./bootstrap.js";
 import { renderCliError } from "./cli-errors.js";
-import { scaffoldDeployConfig } from "./config-scaffold.js";
+import { loadOperatorConfig } from "./orchestrator/config.js";
 import { DeployKitError } from "./errors.js";
 import { atomicWriteFile, writeIfAbsent } from "./fs.js";
 import { dispatchDeployment, inferGitHubRepository, validateApplicationRef } from "./github.js";
@@ -114,6 +114,23 @@ async function confirm(message: string, initial = false): Promise<boolean> {
   if (!process.stdin.isTTY) return false;
   const response = await prompts({ type: "confirm", name: "yes", message, initial });
   return Boolean(response.yes);
+}
+
+/**
+ * Scaffolds, securely reads, and validates the one-file deployment config.
+ * Interactive sessions wait at the prompt so the same command can continue once
+ * the operator has filled the file in.
+ */
+async function loadOperatorDeployment(out: Reporter): Promise<Awaited<ReturnType<typeof loadOperatorConfig>>> {
+  return loadOperatorConfig({
+    confirm: (message) => confirm(message, true),
+    onScaffold: (location) => {
+      out.info(
+        "DK_CONFIG_SCAFFOLDED",
+        `Created ${location.configPath} with mode 0600 and excluded it through ${location.excludePath}`,
+      );
+    },
+  });
 }
 
 export function configureProgram(): Command {
@@ -371,23 +388,22 @@ export function configureProgram(): Command {
       const legacyRequested = options.target !== undefined || options.ref !== undefined ||
         options.repo !== undefined || options.dryRun === true;
       if (!legacyRequested) {
-        const result = await scaffoldDeployConfig();
-        if (result.status === "created") {
-          const details = {
-            config: result.configPath,
-            next: "Fill in deploykit.config.yaml, then run deploykit deploy again",
-          };
-          reporter(command).result(
-            "DK_CONFIG_CREATED",
-            globals(command).json
-              ? details
-              : `Created ${result.configPath} with mode 0600.\nFill in that file, then run deploykit deploy again.`,
-          );
-          return;
-        }
+        const out = reporter(command);
+        const loaded = await loadOperatorDeployment(out);
+        // Phases 3-13 own compilation, GitHub setup, the gateway, and dispatch.
+        // Until they land, a valid config is reported and nothing is mutated.
+        out.info("DK_CONFIG_OK", `Validated ${loaded.location.configPath} for target '${loaded.config.target.name}'`, {
+          project: loaded.config.project.name,
+          repository: loaded.config.project.repository,
+          ref: loaded.config.project.ref,
+          target: loaded.config.target.name,
+          primaryDomain: loaded.config.target.primaryDomain,
+          services: Object.keys(loaded.config.services).sort(),
+          declaredSecretNames: loaded.environment.declaredSecretNames,
+        });
         throw new DeployKitError(
           "DK_UNSUPPORTED",
-          "This build can create deploykit.config.yaml, but the one-command deployment orchestrator is not implemented yet. The legacy --target/--ref path remains available only for already initialized v0.1 projects.",
+          "This build validates deploykit.config.yaml, but the one-command deployment orchestrator is not implemented yet. The legacy --target/--ref path remains available only for already initialized v0.1 projects.",
         );
       }
       if (options.target === undefined || options.ref === undefined) {

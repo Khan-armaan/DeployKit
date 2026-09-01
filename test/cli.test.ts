@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Writable } from "node:stream";
 import { promisify } from "node:util";
 
@@ -111,9 +111,11 @@ describe("public CLI contract", () => {
     }
   });
 
-  it("lets bare deploy securely create the one-file configuration without legacy flags", async () => {
-    const root = await mkdtemp(join(tmpdir(), "deploykit-cli-config-"));
+  it("lets bare deploy scaffold, validate, and refuse the one-file configuration", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "deploykit-cli-config-")));
     await execFileAsync("git", ["init", "--quiet", root]);
+    const configPath = join(root, "deploykit.config.yaml");
+    const fixturePath = resolve("test", "fixtures", "static-compose", "deploykit.config.fixture.yaml");
     const previousDirectory = process.cwd();
     const writes: string[] = [];
     const write = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
@@ -122,14 +124,30 @@ describe("public CLI contract", () => {
     }) as typeof process.stdout.write);
     try {
       process.chdir(root);
-      await expect(main(["node", "deploykit", "deploy"])).resolves.toBeUndefined();
-      expect(writes.join("")).toContain("Created");
+
+      // 1. Missing config: create it, wait, and stop without any remote work.
+      await expect(main(["node", "deploykit", "deploy"])).rejects.toMatchObject({
+        code: "DK_CONFIG_SCAFFOLDED",
+        exitCode: 2,
+      });
       expect(writes.join("")).toContain("deploykit.config.yaml");
-      expect((await stat(join(root, "deploykit.config.yaml"))).mode & 0o777).toBe(0o600);
+      expect((await stat(configPath)).mode & 0o7777).toBe(0o600);
+
+      // 2. Untouched example: refuse the placeholders it still carries.
+      await expect(main(["node", "deploykit", "deploy"])).rejects.toMatchObject({
+        code: "DK_CONFIG_PLACEHOLDER",
+        exitCode: 3,
+      });
+
+      // 3. Filled config: validate it, then stop at the Phase 2 boundary.
+      const filled = await readFile(fixturePath, "utf8");
+      await writeFile(configPath, filled, { mode: 0o600 });
+      await chmod(configPath, 0o600);
       await expect(main(["node", "deploykit", "deploy"])).rejects.toMatchObject({
         code: "DK_UNSUPPORTED",
         message: expect.stringContaining("orchestrator is not implemented yet"),
       });
+      expect(writes.join("")).toContain("DK_CONFIG_OK");
     } finally {
       process.chdir(previousDirectory);
       write.mockRestore();

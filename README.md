@@ -9,7 +9,7 @@ deploykit deploy
 DeployKit handles validation, GitHub Actions, protected variables and secrets, VPS provisioning, exact-commit source checkout, Docker Compose or PM2 services, static frontends, automatic ports, Nginx, TLS, health checks, and safe resume.
 
 > [!IMPORTANT]
-> The one-file workflow documented below is the required next-version interface. The current unreleased source can securely create `deploykit.config.yaml` from the bundled template, but it does **not** yet parse that file or perform the complete GitHub/VPS orchestration below. Released v0.1.2 still requires the legacy flags and self-hosted-runner setup. The documentation is intentionally explicit about this gap so planned behavior is not mistaken for released behavior.
+> The one-file workflow documented below is the required next-version interface. The current unreleased source securely creates, reads, and **fully validates** `deploykit.config.yaml`, reporting stable `DK_CONFIG_*` failures with resume instructions, but it does **not** yet compile that file into a runtime manifest or perform the GitHub/VPS orchestration below. Released v0.1.3 still requires the legacy flags and self-hosted-runner setup. The documentation is intentionally explicit about this gap so planned behavior is not mistaken for released behavior.
 
 ## What the user needs
 
@@ -54,6 +54,7 @@ If `deploykit.config.yaml` is missing, DeployKit obtains the template automatica
 3. It creates the file with mode `0600` and adds it to the repository-local Git exclude file without changing the tracked `.gitignore`.
 4. It verifies that the file is untracked, unstaged, non-symlinked, user-owned, and not readable by other users.
 5. In an interactive terminal, it waits without making remote changes while the user fills in the file.
+6. It then parses the file strictly, rejecting unknown fields, non-string environment values, reserved `DEPLOYKIT_*` names, secret-like public frontend names, overlapping names across partitions, ambiguous or unresolved routes, unsafe refs and paths, and any bundled example placeholder that was never replaced.
 
 The user never needs to find a global npm directory or manually copy an asset. In a non-interactive environment, DeployKit creates the file and exits with an instruction to fill it and rerun the same command.
 

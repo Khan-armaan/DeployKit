@@ -1,5 +1,7 @@
 import { inspect } from "node:util";
 
+import { createExactValueRedactor, type ExactValueRedactor } from "./orchestrator/redaction.js";
+
 const SECRET_PATTERN = /(token|secret|password|passwd|private[_-]?key|api[_-]?key|authorization|cookie)/i;
 const VALUE_PATTERN = /((?:token|secret|password|passwd|private[_-]?key|api[_-]?key|authorization)\s*[=:]\s*)([^\s,;]+)/gi;
 
@@ -14,6 +16,27 @@ export interface LogEvent {
   time: string;
 }
 
+/**
+ * Exact operator secret values, registered once the single secret-bearing
+ * `deploykit.config.yaml` has been partitioned. Key- and pair-shaped redaction
+ * below cannot know these literals, so they are replaced separately.
+ */
+let registeredRedactedValues: ReadonlySet<string> = new Set<string>();
+let exactValueRedactor: ExactValueRedactor = createExactValueRedactor([]);
+
+export function registerRedactedValues(values: Iterable<string>): void {
+  const merged = new Set<string>(registeredRedactedValues);
+  for (const value of values) merged.add(value);
+  registeredRedactedValues = merged;
+  exactValueRedactor = createExactValueRedactor(merged);
+}
+
+/** Test-only reset so one suite's canaries never leak into another's output. */
+export function clearRedactedValues(): void {
+  registeredRedactedValues = new Set<string>();
+  exactValueRedactor = createExactValueRedactor([]);
+}
+
 export function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === "object") {
@@ -24,7 +47,9 @@ export function redact(value: unknown): unknown {
       ])
     );
   }
-  if (typeof value === "string") return value.replace(VALUE_PATTERN, "$1[REDACTED]");
+  if (typeof value === "string") {
+    return exactValueRedactor.redactText(value).replace(VALUE_PATTERN, "$1[REDACTED]");
+  }
   return value;
 }
 

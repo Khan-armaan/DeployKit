@@ -2,7 +2,9 @@
 
 Status: **frozen design contract, not implemented behavior.**
 
-This file records the boundaries that [`orchestrator-implementation-plan.md`](orchestrator-implementation-plan.md) freezes in Phase 1. Nothing described here is reachable from the shipped CLI: `src/orchestrator/` contains type declarations and a failure catalog only, it is not exported from `src/index.ts`, and no code path in this phase performs a network request, an SSH connection, or a filesystem mutation.
+This file records the boundaries that [`orchestrator-implementation-plan.md`](orchestrator-implementation-plan.md) freezes in Phase 1. `src/orchestrator/` is still not exported from `src/index.ts`, and no orchestration code path performs a network request or an SSH connection.
+
+Phase 2 made the catalog's first four rows real. The `config-filesystem` and `config-schema` boundaries are now raised by bare `deploykit deploy`, and each failure carries its frozen recovery action and resume instruction in the error details. Every other row below remains a design contract until the phase that owns it lands.
 
 The authoritative definitions live in:
 
@@ -10,6 +12,8 @@ The authoritative definitions live in:
 - `src/orchestrator/dependencies.ts` — dependency-injected ports for GitHub, administrator SSH, gateway transport, config filesystem, operation state, clock, and output.
 - `src/orchestrator/failures.ts` — the stable `DK_*` failure and recovery catalog reproduced below.
 - `test/fixtures/orchestrator/` — protocol, ownership, state, and config examples with their expected failures.
+
+Phase 2 additionally implements the config boundary in `src/orchestrator/config-file.ts`, `src/orchestrator/config-schema.ts`, `src/orchestrator/config.ts`, and `src/orchestrator/redaction.ts`; `test/orchestrator-config.test.ts` asserts that every `config/invalid/` fixture is rejected with exactly the code and recovery `expectations.json` names.
 
 `test/orchestrator-contracts.test.ts` pins a SHA-256 digest over the whole contract surface, so any edit to a version string, key order, limit, recovery instruction, or failure entry fails the suite until it is made deliberately.
 

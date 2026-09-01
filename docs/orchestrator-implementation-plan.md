@@ -121,6 +121,8 @@ Completion gate:
 - A secret canary never appears in JSON output, error details, snapshots, or captured logs.
 - No network or VPS work exists in this phase.
 
+Delivered by: `src/orchestrator/config-file.ts` (scaffold, repository-local exclude, worktree-aware Git checks, `O_NOFOLLOW` secure read), `src/orchestrator/config-schema.ts` (strict Zod schema, placeholder detection, cross-field semantics, environment partitioning), `src/orchestrator/config.ts` (composition plus the `ConfigFileSystemPort` implementation), `src/orchestrator/redaction.ts` and the `registerRedactedValues` hook in `src/output.ts`, the expanded `assets/deploykit.config.example.yaml`, `test/orchestrator-config.test.ts`, and `test/orchestrator-config-isolation.test.ts`. `src/config-scaffold.ts` was replaced by these modules; bare `deploykit deploy` now scaffolds, waits, securely reads, and validates the config, then still stops at `DK_UNSUPPORTED` because Phases 3-13 own compilation, GitHub setup, the gateway, and dispatch. `src/orchestrator/` remains unexported from `src/index.ts`.
+
 ### Phase 3 — Deterministic compiler and project validation
 
 Depends on: Phase 2 complete.
@@ -450,7 +452,7 @@ Completion gate:
 | Order | Phase | Status |
 | --- | --- | --- |
 | 1 | Contracts and fixtures | Complete |
-| 2 | Config scaffolding/loading/schema | Planned |
+| 2 | Config scaffolding/loading/schema | Complete |
 | 3 | Compiler and project validation | Planned |
 | 4 | Orchestrator core with fakes | Planned |
 | 5 | Server runtime foundation | Planned |

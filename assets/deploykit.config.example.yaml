@@ -1,21 +1,35 @@
 # DeployKit one-file deployment configuration.
 #
 # This file is bundled with the npm package. On first use, `deploykit deploy`
-# creates deploykit.config.yaml from it with mode 0600 and waits while the user
-# replaces the example values. The current v0.1 CLI does not implement this
-# contract yet; this template defines the required next-version interface.
+# copies it to deploykit.config.yaml with mode 0600, adds it to the
+# repository-local Git exclude file, and waits while you replace the example
+# values below.
+#
+# Every placeholder in this file MUST be replaced. DeployKit refuses to deploy
+# while any of them remain and reports DK_CONFIG_PLACEHOLDER with the exact
+# field paths that still hold example values.
+#
+# The file is the only secret-bearing deployment input. Keep it mode 0600,
+# untracked, unstaged, and Git-ignored. Values under `environment.backend` are
+# treated as secrets: they never enter Git, generated files, process arguments,
+# logs, or errors.
 
 apiVersion: deploykit/config/v1alpha1
 kind: Deployment
 
 project:
+  # Lowercase identifier used for state, ports, and generated resource names.
   name: example-app
-  repository: owner/private-repository
+  # The private GitHub repository DeployKit deploys, as owner/name.
+  repository: your-org/your-repo
+  # Branch, tag, or full ref. DeployKit freezes it to one exact commit SHA.
   ref: main
 
 target:
   name: production
+  # The GitHub Environment that holds this target's variables and secrets.
   githubEnvironment: deploykit-production
+  # Must already resolve directly (A/AAAA, never CNAME) to the VPS below.
   primaryDomain: app.example.com
   aliases:
     - www.app.example.com
@@ -24,35 +38,46 @@ server:
   host: vps.example.com
   user: ubuntu
   port: 22
-  identityFile: /absolute/path/to/.ssh/example-production
+  # Administrator key used only from this machine. It is never uploaded.
+  identityFile: /home/you/.ssh/id_ed25519
+  # Verify out of band: ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -
   hostKeyFingerprint: SHA256:replace-with-verified-ed25519-fingerprint
   configureFirewall: false
 
-# Existing Compose files remain application-owned. Remove this block when the
-# project uses only PM2/static workloads.
+# Application-owned Compose files. Required when any service or the database
+# uses `type: compose`. DeployKit reads them and never rewrites them.
 compose:
   files:
     - compose.yaml
 
 services:
-  backend:
+  api:
     type: compose
+    # Service name inside the Compose files above.
     service: api
+    # Port the container listens on.
     internalPort: 3000
+    # `auto` lets DeployKit allocate a collision-free loopback port under its
+    # global registry lock. Replace it with a number only to pin one yourself.
     hostPort: auto
     healthCheck:
       type: http
       path: /health
       expectedStatuses:
         - 200
+      intervalSeconds: 10
+      timeoutSeconds: 5
+      retries: 12
+      startPeriodSeconds: 0
 
-  # A PM2 backend can be declared instead of the Compose service above:
-  # backend:
+  # A PM2 workload can be declared instead of, or alongside, a Compose service:
+  #
+  # api:
   #   type: pm2
-  #   role: api
+  #   role: api            # api | ssr for network workloads
   #   workingDirectory: backend
   #   nodeVersion: 22.18.0
-  #   packageManager: npm
+  #   packageManager: npm  # npm | pnpm | yarn | bun
   #   installCommand: [npm, ci]
   #   buildScript: build
   #   startScript: start
@@ -61,6 +86,18 @@ services:
   #   healthCheck:
   #     type: http
   #     path: /health
+  #
+  # A PM2 worker has no port and no route:
+  #
+  # worker:
+  #   type: pm2
+  #   role: worker
+  #   workingDirectory: worker
+  #   nodeVersion: 22.18.0
+  #   packageManager: npm
+  #   startScript: start
+  #   healthCheck:
+  #     type: process
 
 frontend:
   type: static
@@ -74,28 +111,84 @@ frontend:
   outputDirectory: dist
   spaFallback: true
 
+  # A containerized or server-rendered frontend is a service instead:
+  #
+  # frontend:
+  #   type: service
+  #   service: web
+
 routes:
+  # More specific routes may be declared before broader ones; DeployKit orders
+  # the generated Nginx locations deterministically regardless of file order.
+  - hostname: "@primary"
+    path: /api/upload
+    match: exact
+    target: api
+    preservePrefix: true
+    requestBuffering: false
+    uploadLimit: 25m
+    timeouts:
+      connect: 60
+      send: 300
+      read: 300
   - hostname: "@primary"
     path: /api/
     match: prefix
-    target: backend
+    target: api
     preservePrefix: true
-    websocket: false
+    websocket: true
 
-# This is the only environment-variable input. Frontend values are public and
-# embedded at build time. Backend values are treated as secrets, synchronized
-# through the target GitHub Environment, and stored only in the VPS 0600 file.
+# Remove this block when the application has no DeployKit-managed database.
+database:
+  type: compose
+  service: postgres
+  internalPort: 5432
+  consumers:
+    - api
+  volume: postgres-data
+  credentials:
+    username: example_app
+    database: example_app
+    # Secret names only. Declare them under environment.generated (recommended)
+    # or environment.backend.
+    passwordSecret: POSTGRES_PASSWORD
+    connectionStringSecret: DATABASE_URL
+    connectionStringTemplate: postgresql://{username}:{password}@{host}:{port}/{database}
+  migrations:
+    service: api
+    command:
+      - npm
+      - run
+      - migrate
+  # seed:
+  #   service: api
+  #   command: [npm, run, seed]
+
+  # An externally hosted database is declared instead:
+  #
+  # database:
+  #   type: external
+  #   connectionStringSecret: DATABASE_URL
+  #   tlsCaSecret: DATABASE_CA
+  #   requireTls: true
+
+# The only environment-variable input.
 environment:
+  # Public build-time values. They are embedded in built frontend assets and in
+  # the reviewable runtime manifest, so they must never hold a credential.
   frontend:
     VITE_API_BASE_URL: /api
 
+  # Secret values. They are synchronized to the target GitHub Environment and
+  # written only to the VPS mode-0600 secrets file. Names must not start with
+  # DEPLOYKIT_ and must not repeat a frontend or generated name.
   backend:
     NODE_ENV: production
     CERTBOT_EMAIL: ops@example.com
-    DATABASE_URL: postgresql://replace-with-real-credentials
-    SESSION_SECRET: replace-with-a-long-random-value
 
-  # These names have no local value. The VPS generates each missing value once
-  # and preserves it for idempotent retry.
+  # Names with no local value. The VPS generates each missing value once and
+  # preserves it across retries of the same deployment.
   generated:
-    - INTERNAL_SIGNING_KEY
+    - DATABASE_URL
+    - POSTGRES_PASSWORD
+    - SESSION_SECRET
