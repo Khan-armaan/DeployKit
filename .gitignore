@@ -8,4 +8,5 @@ coverage/
 .env
 .env.*
 !.env.example
+deploykit.config.yaml
 .DS_Store

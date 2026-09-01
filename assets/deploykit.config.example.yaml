@@ -1,0 +1,101 @@
+# DeployKit one-file deployment configuration.
+#
+# Copy this file to deploykit.config.yaml, replace every example value, and keep
+# the resulting file untracked with mode 0600. `deploykit deploy` is the only
+# intended public workflow. The current v0.1 CLI does not implement this
+# contract yet; this template defines the required next-version interface.
+
+apiVersion: deploykit/config/v1alpha1
+kind: Deployment
+
+project:
+  name: example-app
+  repository: owner/private-repository
+  ref: main
+
+target:
+  name: production
+  githubEnvironment: deploykit-production
+  primaryDomain: app.example.com
+  aliases:
+    - www.app.example.com
+
+server:
+  host: vps.example.com
+  user: ubuntu
+  port: 22
+  identityFile: /absolute/path/to/.ssh/example-production
+  hostKeyFingerprint: SHA256:replace-with-verified-ed25519-fingerprint
+  configureFirewall: false
+
+# Existing Compose files remain application-owned. Remove this block when the
+# project uses only PM2/static workloads.
+compose:
+  files:
+    - compose.yaml
+
+services:
+  backend:
+    type: compose
+    service: api
+    internalPort: 3000
+    hostPort: auto
+    healthCheck:
+      type: http
+      path: /health
+      expectedStatuses:
+        - 200
+
+  # A PM2 backend can be declared instead of the Compose service above:
+  # backend:
+  #   type: pm2
+  #   role: api
+  #   workingDirectory: backend
+  #   nodeVersion: 22.18.0
+  #   packageManager: npm
+  #   installCommand: [npm, ci]
+  #   buildScript: build
+  #   startScript: start
+  #   portEnvironmentVariable: PORT
+  #   hostPort: auto
+  #   healthCheck:
+  #     type: http
+  #     path: /health
+
+frontend:
+  type: static
+  workingDirectory: frontend
+  nodeVersion: 22.18.0
+  packageManager: npm
+  installCommand:
+    - npm
+    - ci
+  buildScript: build
+  outputDirectory: dist
+  spaFallback: true
+
+routes:
+  - hostname: "@primary"
+    path: /api/
+    match: prefix
+    target: backend
+    preservePrefix: true
+    websocket: false
+
+# This is the only environment-variable input. Frontend values are public and
+# embedded at build time. Backend values are treated as secrets, synchronized
+# through the target GitHub Environment, and stored only in the VPS 0600 file.
+environment:
+  frontend:
+    VITE_API_BASE_URL: /api
+
+  backend:
+    NODE_ENV: production
+    CERTBOT_EMAIL: ops@example.com
+    DATABASE_URL: postgresql://replace-with-real-credentials
+    SESSION_SECRET: replace-with-a-long-random-value
+
+  # These names have no local value. The VPS generates each missing value once
+  # and preserves it for idempotent retry.
+  generated:
+    - INTERNAL_SIGNING_KEY
