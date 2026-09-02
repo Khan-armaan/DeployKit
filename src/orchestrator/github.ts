@@ -62,6 +62,9 @@ export const GITHUB_CLIENT_LIMITS = Object.freeze({
   requestTimeoutMs: 60_000,
 } as const);
 
+/** GitHub's own ceiling on the `files` array of a comparison response. */
+export const GITHUB_COMPARISON_FILE_LIMIT = 300;
+
 // -------------------------------------------------------------- validation --
 
 const REPOSITORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/u;
@@ -376,6 +379,19 @@ export interface GitHubBranch {
   readonly protected: boolean;
 }
 
+/**
+ * A bounded two-dot comparison. GitHub caps the file list, so `truncated` is
+ * reported rather than hidden: a caller that must prove a branch changed
+ * *nothing* outside a known set has to fail closed when the list is capped.
+ */
+export interface GitHubComparison {
+  readonly status: "identical" | "ahead" | "behind" | "diverged";
+  readonly aheadBy: number;
+  readonly behindBy: number;
+  readonly files: readonly string[];
+  readonly truncated: boolean;
+}
+
 export type GitHubPullRequestState = "open" | "closed";
 
 export interface GitHubPullRequest {
@@ -480,6 +496,8 @@ export interface GitHubClient {
 
   getBranch(repository: string, branch: string): Promise<GitHubBranch | undefined>;
   createBranch(repository: string, branch: string, commitSha: GitCommitSha): Promise<GitHubBranch>;
+  /** Two-dot comparison of `head` against `base`; absent when either ref is gone. */
+  compareCommits(repository: string, base: string, head: string): Promise<GitHubComparison | undefined>;
 
   listPullRequests(
     repository: string,
@@ -990,6 +1008,40 @@ export function createGitHubClient(options: GitHubClientOptions = {}): GitHubCli
       const created = readString(readObject(source, "object"), "sha");
       assertCommitSha(created);
       return { name: branch, commitSha: created, protected: false };
+    },
+
+    async compareCommits(repository, base, head): Promise<GitHubComparison | undefined> {
+      assertRepository(repository);
+      assertRepositoryPath(base, "branch");
+      assertRepositoryPath(head, "branch");
+      const source = await callObject({
+        method: "GET",
+        // The comparison range is one path segment; `encodePath` keeps the
+        // separators inside a branch name literal, which is what GitHub expects.
+        path: `repos/${encodePath(repository)}/compare/${encodePath(`${base}...${head}`)}`,
+        absentOnNotFound: true,
+      });
+      if (source === undefined) return undefined;
+      const files: string[] = [];
+      for (const entry of readArray(source, "files")) {
+        if (!isJsonObject(entry)) throw apiFailure("A GitHub comparison file entry is not an object");
+        files.push(readString(entry, "filename"));
+        const previous = readOptionalString(entry, "previous_filename");
+        if (previous !== null) files.push(previous);
+      }
+      return {
+        status: readEnum<GitHubComparison["status"]>(
+          source,
+          "status",
+          new Set(["identical", "ahead", "behind", "diverged"]),
+        ),
+        aheadBy: readNumber(source, "ahead_by"),
+        behindBy: readNumber(source, "behind_by"),
+        files: [...new Set(files)].sort(compareCodePoints),
+        // GitHub returns at most 300 entries and does not say so; a full page is
+        // therefore treated as possibly incomplete rather than as the whole diff.
+        truncated: files.length >= GITHUB_COMPARISON_FILE_LIMIT,
+      };
     },
 
     async listPullRequests(repository, query): Promise<readonly GitHubPullRequest[]> {

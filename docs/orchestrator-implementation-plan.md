@@ -386,6 +386,18 @@ Completion gate:
 - Setup-PR tests cover creation, reuse, drift, conflicts, review wait, interruption, merge, and exact default-branch re-verification.
 - The workflow cannot dispatch through DeployKit yet.
 
+Delivered by: `src/orchestrator/workflow.ts` (the deterministic workflow renderer and the bundled-client resolver), `assets/gateway-client.mjs` (the bounded gateway client the workflow embeds), `src/orchestrator/control-artifacts.ts` (setup-branch, setup-pull-request, and default-branch verification), and `test/orchestrator-control-artifacts.test.ts`.
+
+The workflow is written to be read. The whole client — verification, framing, transport, and reporting — is embedded in the file through a quoted heredoc rather than installed at run time, so the bytes an operator merges are the bytes that will hold their secrets: no `npm install`, no `curl | sh`, and one pinned third-party action addressed by commit SHA. The rendered file is a pure function of the deployment context, which is what makes a rerun that changes nothing produce no second pull request.
+
+Binding is checked twice. The repository, target, target ID, Environment, and application ref are baked in at render time and re-verified at run time against `github.repository`, the dispatch inputs, and the Environment's own `DEPLOYKIT_TARGET_ID`; the run also refuses any ref that is not the protected default branch. Before a single frame is sent, the client hashes the committed runtime manifest against the dispatched digest and hashes the running workflow file against the digest the ownership marker recorded, so a workflow edited after the review, a manifest that no longer matches, or a dispatch aimed at another target stops before the credentials are used. `permissions` grants `contents: read` and nothing else, the checkout does not persist credentials, and the staged key and `known_hosts` live in a mode-0700 directory under `RUNNER_TEMP` that is shredded in `always()`.
+
+Secret *names* come from the reviewed control artifacts, never from the runner's environment. The whole secret bundle is injected through `toJSON(secrets)` and the client sends only the names the ownership marker declares as operator secrets — so the gateway key, the Actions token, and anything else the Environment happens to carry are never framed. Generated secrets are deliberately not sent: the VPS creates and preserves them, and a name DeployKit holds no value for would be a lie on the wire. The rendered bytes carry no value at all.
+
+Reconciliation compares bytes, not claims. A path is DeployKit's only when the ownership marker sits beside it and names this deployment; a managed path occupied without that marker, a marker bound to another target, a pull request somebody redirected onto the setup branch, a setup pull request retargeted away from the default branch, and a setup branch carrying any change outside the three managed files are all refused rather than reconciled. Ownership refusals are raised rather than returned, because `ControlArtifactsState` has one `conflict` status and no room to say *which* resource and *why*; drift, which a rerun fixes by itself, stays a status. The setup branch is verified both before the writes and after them, so a branch that grows an unrelated commit mid-reconcile is never offered for review as if it held only DeployKit's files. DeployKit creates the branch and the pull request and then waits: there is no merge, approve, or protection-bypass call anywhere in the module, and `--no-wait` stops resumably at `DK_SETUP_PR_REVIEW_REQUIRED` instead of blocking. After a merge the default branch is re-read and compared byte for byte; bytes that still disagree are reported as `DK_CONTROL_ARTIFACTS_DRIFTED`, not accepted.
+
+Supporting changes to existing modules: `GitHubClient` gained the bounded read-only `compareCommits`, which is how "this branch changes only the managed files" is proven rather than assumed — a comparison whose file list hits GitHub's 300-entry ceiling fails closed instead of truncating; and `src/orchestrator/deploy.ts` now defaults `renderWorkflow` to the bundled renderer instead of throwing `DK_UNSUPPORTED`, so no caller can reconcile a workflow of its own invention. `src/orchestrator/` remains unexported from `src/index.ts`, no CLI path constructs the reconciler, Environment synchronization and workflow dispatch remain unreachable, and bare `deploykit deploy` still stops at `DK_UNSUPPORTED` after compiling.
+
 ### Phase 11 — Cross-plane keys and GitHub Environment
 
 Depends on: Phase 10 complete.
@@ -514,7 +526,7 @@ Completion gate:
 | 7 | Exact-SHA source provider | Complete |
 | 8 | VPS bootstrap/key lifecycle | Complete |
 | 9 | GitHub client primitives | Complete |
-| 10 | Control artifacts/setup PR | Planned |
+| 10 | Control artifacts/setup PR | Complete |
 | 11 | Cross-plane keys/Environment | Planned |
 | 12 | Full orchestration/dispatch | Planned |
 | 13 | CLI cutover/migration/docs | Planned |

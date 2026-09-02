@@ -56,6 +56,7 @@ import {
   type RuntimeBundleReference,
 } from "./planner.js";
 import { validateCompiledProject } from "./project.js";
+import { createManagedWorkflowRenderer } from "./workflow.js";
 
 /**
  * Phase 4: the dependency-injected orchestration state machine.
@@ -315,14 +316,9 @@ export async function runDeployment(
   const planner =
     options.planner ??
     createDesiredStatePlanner({
-      renderWorkflow:
-        options.renderWorkflow ??
-        (() => {
-          throw new DeployKitError(
-            "DK_UNSUPPORTED",
-            "No managed workflow renderer was supplied. Phase 10 owns .github/workflows/deploykit.yml.",
-          );
-        }),
+      // Phase 10 owns these bytes; the bundled renderer is the default so a
+      // caller cannot accidentally reconcile a workflow of its own invention.
+      renderWorkflow: options.renderWorkflow ?? createManagedWorkflowRenderer(),
       runtimeBundle: options.runtimeBundle,
     });
 
