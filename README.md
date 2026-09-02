@@ -28,6 +28,8 @@ Before deployment, the user must control these external resources:
 - A trusted application repository whose deployable commit is pushed to GitHub.
 - A protected default branch and an authenticated GitHub CLI session with permission to manage the repository, Actions, deploy keys, and the target Environment.
 - An Ubuntu 22.04 or 24.04 amd64/arm64 VPS reachable with an administrator SSH identity.
+- That administrator account must be able to run `sudo -n true` — root, or an account with passwordless sudo. DeployKit never opens an interactive prompt on the host.
+- The administrator private key must have **no passphrase**, and `server.host`/`server.port` must be the real address rather than a `~/.ssh/config` alias. Every administrator connection runs with `-F /dev/null`, `BatchMode=yes`, `IdentityAgent=none`, and `PasswordAuthentication=no`, so your SSH config, your agent, and any password prompt are all deliberately out of reach: the only credential that can open the connection is the file named by `server.identityFile`.
 - The VPS ED25519 host-key fingerprint verified through a trusted channel.
 - Direct DNS A and/or AAAA records for every configured domain pointing to the VPS. CNAME and proxied/CDN records are not accepted.
 - Production-ready application build inputs, such as Dockerfiles, Compose files, package scripts, health endpoints, and static build output settings.

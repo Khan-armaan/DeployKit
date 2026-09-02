@@ -6,6 +6,7 @@
 
 ## 0.1.4
 
+- Documented three administrator-SSH constraints the code already enforced and the prerequisites did not mention: the administrator account must satisfy `sudo -n true` (root or passwordless sudo), the administrator private key must have no passphrase, and `server.host`/`server.port` must be the real address rather than a `~/.ssh/config` alias. Every administrator connection runs with `-F /dev/null`, `BatchMode=yes`, `IdentityAgent=none`, and `PasswordAuthentication=no`, so the operator's SSH config, agent, and any password prompt are all out of reach by design — which is correct, and was going to surprise the first real operator.
 - Orchestrator Phase 2: bare `deploykit deploy` now scaffolds, securely reads, and strictly validates `deploykit.config.yaml` before doing anything else, and reports stable `DK_CONFIG_SCAFFOLDED`, `DK_CONFIG_INSECURE`, `DK_CONFIG_PLACEHOLDER`, and `DK_CONFIG_INVALID` failures with their frozen recovery instructions.
 - Secure read opens the file with `O_NOFOLLOW` and validates the opened descriptor: regular file, current-user owned, mode `0600` exactly, size-bounded, and untracked, unstaged, and Git-ignored inside the repository. Linked Git worktrees share the main checkout's exclude file.
 - Expanded `assets/deploykit.config.example.yaml` with Compose, PM2 (including a worker), static and service frontends, routing, health checks, automatic ports, a database block, and generated-secret names.
