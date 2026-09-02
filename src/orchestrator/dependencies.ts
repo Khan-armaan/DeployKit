@@ -191,6 +191,14 @@ export interface GatewayBootstrapResult {
   readonly repositoryPublicKeyFingerprint: string;
 }
 
+/** Nonsecret proof that the VPS-held read-only key opens the bound repository. */
+export interface RepositoryAccessProofFacts {
+  readonly repository: string;
+  readonly authenticatedAs: string;
+  readonly keyFingerprint: string;
+  readonly reachable: true;
+}
+
 export interface AdministratorSshPort {
   preflight(connection: AdministratorSshConnection): Promise<AdministratorSshPreflight>;
   inspectGateway(
@@ -198,6 +206,15 @@ export interface AdministratorSshPort {
     expectedBinding: RootOwnedGatewayBinding,
   ): Promise<GatewayHandshakeResult | undefined>;
   bootstrapGateway(request: GatewayBootstrapRequest): Promise<GatewayBootstrapResult>;
+  /**
+   * Phase 11's read-only source-key proof. Optional so an adapter that cannot
+   * reach GitHub from the host — a hermetic test double — stays valid; when it
+   * is present the state machine refuses to continue on an unproven key.
+   */
+  proveRepositoryAccess?(
+    connection: AdministratorSshConnection,
+    binding: RootOwnedGatewayBinding,
+  ): Promise<RepositoryAccessProofFacts>;
 }
 
 export interface GatewayConnection {

@@ -699,6 +699,8 @@ describe("local gateway bootstrap command", () => {
         stageGatewayKey: (connection, binding, key) => portFor(host).stageGatewayKey(connection, binding, key),
         activateGatewayKey: (connection, binding, keyId) =>
           portFor(host).activateGatewayKey(connection, binding, keyId),
+        proveRepositoryAccess: (connection, binding) =>
+          portFor(host).proveRepositoryAccess(connection, binding),
       },
       packageRoot: resolve("."),
     });
@@ -724,6 +726,8 @@ describe("local gateway bootstrap command", () => {
         stageGatewayKey: (connection, binding, key) => portFor(host).stageGatewayKey(connection, binding, key),
         activateGatewayKey: (connection, binding, keyId) =>
           portFor(host).activateGatewayKey(connection, binding, keyId),
+        proveRepositoryAccess: (connection, binding) =>
+          portFor(host).proveRepositoryAccess(connection, binding),
       },
     })).rejects.toMatchObject({ code: "DK_PREFLIGHT_FAILED" });
     expect(host.installerRuns).toBe(0);

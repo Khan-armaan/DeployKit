@@ -56,10 +56,12 @@ const HOST_KEY_FINGERPRINT_PATTERN = /^SHA256:[A-Za-z0-9+/]{43}$/u;
 const SSH_HOST_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/u;
 const SSH_USER_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/u;
 const BOOTSTRAP_RESULT_PREFIX = "DEPLOYKIT_BOOTSTRAP_RESULT ";
+const SOURCE_PROBE_RESULT_PREFIX = "DEPLOYKIT_SOURCE_PROBE ";
 
 /** Where the installer places the one program a forced command may run. */
 export const GATEWAY_ENTRY_PATH = "/usr/local/lib/deploykit/gateway-entry" as const;
 export const GATEWAY_KEYS_HELPER_PATH = "/usr/local/lib/deploykit/gateway-keys" as const;
+export const GATEWAY_SOURCE_PROBE_PATH = "/usr/local/lib/deploykit/gateway-source-probe" as const;
 export const GATEWAY_AUTHORIZED_KEYS_PATH =
   "/var/lib/deploykit-gateway/.ssh/authorized_keys" as const;
 
@@ -68,11 +70,13 @@ export const BOOTSTRAP_ASSET_FILES: readonly string[] = Object.freeze([
   "bootstrap.sh",
   "gateway-binding.sh",
   "gateway-keys.sh",
+  "gateway-source-probe.sh",
 ]);
 
 const BOOTSTRAP_TIMEOUT_MS = 30 * 60_000;
 const HANDSHAKE_TIMEOUT_MS = 2 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 60_000;
+const SOURCE_PROBE_TIMEOUT_MS = 2 * 60_000;
 
 export interface AdministratorRunResult {
   readonly stdout: string;
@@ -327,7 +331,72 @@ export interface GatewayKeyLifecyclePort {
   ): Promise<readonly GatewayKeyEntry[]>;
 }
 
-export type AdministratorSshBoundary = AdministratorSshPort & GatewayKeyLifecyclePort;
+/**
+ * What the VPS proved about its own read-only repository identity. `reachable`
+ * is always true: a probe that could not reach the bound repository raises
+ * instead of reporting a negative result, so no caller can mistake an
+ * unanswered question for a passed one.
+ */
+export interface RepositoryAccessProof {
+  readonly repository: string;
+  /** The identity GitHub greeted the key as. Equal to `repository` or it raises. */
+  readonly authenticatedAs: string;
+  readonly keyFingerprint: string;
+  readonly reachable: true;
+}
+
+/**
+ * Phase 11 proves the repository key before the gateway is trusted to fetch
+ * source with it. This is a read-only operation: it writes nothing on the host
+ * and returns nothing secret.
+ */
+export interface RepositorySourceProbePort {
+  proveRepositoryAccess(
+    connection: AdministratorSshConnection,
+    binding: RootOwnedGatewayBinding,
+  ): Promise<RepositoryAccessProof>;
+}
+
+export type AdministratorSshBoundary = AdministratorSshPort &
+  GatewayKeyLifecyclePort &
+  RepositorySourceProbePort;
+
+export function parseSourceProbeResult(stdout: string): RepositoryAccessProof {
+  const line = stdout
+    .split(/\r?\n/)
+    .reverse()
+    .find((candidate) => candidate.startsWith(SOURCE_PROBE_RESULT_PREFIX));
+  if (line === undefined) {
+    throw bootstrapFailure("The repository access probe did not report a result");
+  }
+  let document: unknown;
+  try {
+    document = JSON.parse(line.slice(SOURCE_PROBE_RESULT_PREFIX.length));
+  } catch (error) {
+    throw bootstrapFailure("The repository access probe reported an unparsable result", {
+      cause: String(error),
+    });
+  }
+  const record = document as Partial<RepositoryAccessProof> & { version?: unknown };
+  if (
+    record.version !== 1 ||
+    typeof record.repository !== "string" ||
+    typeof record.authenticatedAs !== "string" ||
+    typeof record.keyFingerprint !== "string" ||
+    record.reachable !== true
+  ) {
+    throw bootstrapFailure("The repository access probe reported an incomplete result");
+  }
+  if (!HOST_KEY_FINGERPRINT_PATTERN.test(record.keyFingerprint)) {
+    throw bootstrapFailure("The repository access probe reported a malformed key fingerprint");
+  }
+  return {
+    repository: record.repository,
+    authenticatedAs: record.authenticatedAs,
+    keyFingerprint: record.keyFingerprint,
+    reachable: true,
+  };
+}
 
 interface BootstrapResultDocument {
   readonly version: 1;
@@ -659,6 +728,44 @@ export function createAdministratorSshPort(
         throw orchestratorError("DK_KEY_ROTATION_FAILED", "The activated gateway key id is not a safe identifier");
       }
       return runKeyHelper(connection, binding, ["activate", "--key-id", keyId]);
+    },
+
+    async proveRepositoryAccess(connection, binding): Promise<RepositoryAccessProof> {
+      return withPinnedHostKey(connection, async (knownHostsFile) => {
+        const probe = await remote(
+          connection,
+          knownHostsFile,
+          ["sudo", "-n", GATEWAY_SOURCE_PROBE_PATH, "--repository", binding.repository],
+          { timeoutMs: SOURCE_PROBE_TIMEOUT_MS },
+        );
+        // Exit 5 is the probe's frozen "authenticated as somebody else" status.
+        // Registering a read-only key that in fact opens another repository is
+        // an ownership question a human resolves, not a transient failure.
+        if (probe.exitCode === 5) {
+          throw orchestratorError(
+            "DK_OWNERSHIP_CONFLICT",
+            `The read-only repository key held by ${connection.host} does not authenticate as ${binding.repository}`,
+            { details: { host: connection.host, repository: binding.repository } },
+          );
+        }
+        if (probe.exitCode !== 0) {
+          throw bootstrapFailure(
+            `${connection.host} could not reach ${binding.repository} with its read-only repository identity`,
+            { host: connection.host, repository: binding.repository, exitCode: probe.exitCode },
+          );
+        }
+        const proof = parseSourceProbeResult(probe.stdout);
+        // The probe already refuses a mismatch; re-checking here means a helper
+        // that was replaced with a permissive one still cannot pass.
+        if (proof.repository !== binding.repository || proof.authenticatedAs !== binding.repository) {
+          throw orchestratorError(
+            "DK_OWNERSHIP_CONFLICT",
+            `The read-only repository key held by ${connection.host} does not authenticate as ${binding.repository}`,
+            { details: { host: connection.host, repository: binding.repository } },
+          );
+        }
+        return proof;
+      });
     },
   };
 }

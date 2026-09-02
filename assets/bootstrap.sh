@@ -248,6 +248,7 @@ install -m 0644 -o root -g root "$DEPLOYKIT_CLI_ROOT/assets/github-known-hosts" 
 install -d -m 0755 /usr/local/lib/deploykit
 install -m 0755 -o root -g root "$DEPLOYKIT_CLI_ROOT/assets/gateway-binding.sh" /usr/local/lib/deploykit/gateway-binding
 install -m 0755 -o root -g root "$DEPLOYKIT_CLI_ROOT/assets/gateway-keys.sh" /usr/local/lib/deploykit/gateway-keys
+install -m 0755 -o root -g root "$DEPLOYKIT_CLI_ROOT/assets/gateway-source-probe.sh" /usr/local/lib/deploykit/gateway-source-probe
 
 # A system account with no password, no login shell, and no supplementary
 # groups. It is deliberately *not* in the docker group: reaching Docker through

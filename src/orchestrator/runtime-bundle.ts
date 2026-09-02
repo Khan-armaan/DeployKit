@@ -32,6 +32,7 @@ export const REQUIRED_BUNDLE_ENTRIES: readonly string[] = Object.freeze([
   "package/assets/bootstrap.sh",
   "package/assets/gateway-binding.sh",
   "package/assets/gateway-keys.sh",
+  "package/assets/gateway-source-probe.sh",
 ]);
 
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;

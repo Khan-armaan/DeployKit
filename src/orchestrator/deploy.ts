@@ -697,6 +697,19 @@ export async function runDeployment(
           `The read-only repository key on ${context.repository} does not match the key held by ${connection.host}`,
         );
       }
+      // Registration proves GitHub accepted the key. It does not prove the host
+      // can use it, nor that it opens *this* repository and no other, so the
+      // VPS is asked to demonstrate both before the gateway is trusted to fetch
+      // source with it.
+      if (deps.administratorSsh.proveRepositoryAccess !== undefined) {
+        const proof = await deps.administratorSsh.proveRepositoryAccess(connection, expectedBinding);
+        if (proof.authenticatedAs !== context.repository || proof.keyFingerprint !== repositoryPublicKeyFingerprint) {
+          throw ownershipConflict(
+            `The read-only key held by ${connection.host} does not authenticate as ${context.repository}`,
+          );
+        }
+      }
+
       run.readiness = {
         ...run.readiness,
         repositoryKey: {
@@ -726,6 +739,18 @@ export async function runDeployment(
     let desiredEnvironment: DesiredGitHubEnvironment | undefined;
     let environmentState: GitHubEnvironmentState | undefined;
     let access: GatewayAccessFacts | undefined;
+
+    // Secrets are uploaded in this step, so both readiness facts that make an
+    // upload safe are asserted first rather than assumed from the flow above:
+    // the reviewed control artifacts are on the default branch, and the host
+    // answering for this binding is the one whose key the secrets will carry. A
+    // dry run mutates nothing and is allowed to inspect without them.
+    if (!dryRun && !run.readiness.controlArtifacts.ready) {
+      throw notReady(`control artifacts on ${context.defaultBranch} were not verified before secret synchronization`);
+    }
+    if (!dryRun && !run.readiness.gateway.ready) {
+      throw notReady(`the gateway on ${connection.host} was not verified before secret synchronization`);
+    }
 
     if (handshake !== undefined) {
       access = await options.gatewayAccess(context, handshake);

@@ -25,6 +25,7 @@ import {
   type RootOwnedGatewayBinding,
   type Sha256Hex,
 } from "./contracts.js";
+import { orchestratorError } from "./failures.js";
 import type {
   DesiredControlArtifacts,
   DesiredGitHubEnvironment,
@@ -54,6 +55,9 @@ import type {
 
 const MANAGED_RESOURCE_DIGEST_API_VERSION = "deploykit/managed-resources/v1alpha1" as const;
 const GATEWAY_BINDING_ID_API_VERSION = "deploykit/gateway-binding-id/v1alpha1" as const;
+
+/** The prefix the config schema forbids operators from using. */
+const RESERVED_VALUE_PREFIX = "DEPLOYKIT_";
 
 /**
  * Set on an expected binding for fields only the VPS can know. The state
@@ -116,6 +120,13 @@ export interface GatewayAccessFacts {
    * {@link MANAGED_GATEWAY_PRIVATE_KEY_SECRET} here.
    */
   readonly secrets: Readonly<Record<string, string>>;
+  /**
+   * Additional nonsecret target-Environment variables, keyed by name. Phase 11
+   * supplies the gateway and repository key fingerprints here. Every name must
+   * carry the reserved `DEPLOYKIT_` prefix, because that prefix is what makes
+   * the value DeployKit-owned and therefore safe to overwrite and delete.
+   */
+  readonly variables?: Readonly<Record<string, string>>;
   /**
    * Local private-key path for a gateway exchange. Present only while the
    * orchestrator legitimately holds a gateway key; when absent the state
@@ -297,8 +308,19 @@ export function createDesiredStatePlanner(parts: DesiredStatePlannerParts): Desi
     },
 
     environment(context, access): DesiredGitHubEnvironment {
+      const supplied = access.variables ?? {};
+      for (const name of Object.keys(supplied)) {
+        if (!name.startsWith(RESERVED_VALUE_PREFIX)) {
+          throw orchestratorError(
+            "DK_ENVIRONMENT_CONFLICT",
+            `A gateway-supplied Environment variable must use the reserved ${RESERVED_VALUE_PREFIX} prefix`,
+            { details: { name } },
+          );
+        }
+      }
       const variables = sortedRecord({
         ...context.environment.publicValues,
+        ...supplied,
         [MANAGED_GATEWAY_HOST_VARIABLE]: access.host,
         [MANAGED_GATEWAY_PORT_VARIABLE]: String(access.port),
         [MANAGED_GATEWAY_USER_VARIABLE]: access.user,

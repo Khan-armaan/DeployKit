@@ -295,7 +295,7 @@ function keyMaterial(publicKey: string): string {
  */
 export function resolveDeployKeyOwnership(
   keys: readonly GitHubDeployKey[],
-  names: GitHubManagedResourceNames,
+  names: Pick<GitHubManagedResourceNames, "repositoryDeployKeyTitle">,
   expectedPublicKey?: string,
 ): DeployKeyOwnership {
   const absent: DeployKeyOwnership = { status: "missing", key: null, matchesExpectedKey: false, reason: null };
