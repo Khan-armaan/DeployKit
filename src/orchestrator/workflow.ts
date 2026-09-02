@@ -1,10 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { stringify } from "yaml";
 
 import { DeployKitError } from "../errors.js";
+import { resolvePackageRoot } from "../package-root.js";
 import {
   MANAGED_GATEWAY_HOST_VARIABLE,
   MANAGED_GATEWAY_KNOWN_HOSTS_VARIABLE,
@@ -60,9 +60,6 @@ export const MANAGED_CHECKOUT_ACTION_SHA = "9c091bb21b7c1c1d1991bb908d89e4e9dddf
 
 export const MANAGED_WORKFLOW_ASSET = "assets/gateway-client.mjs";
 
-/** Enough to reach the package root from `dist/chunks/` and from `src/orchestrator/`. */
-const PACKAGE_ROOT_SEARCH_DEPTH = 4;
-
 /** Where the staged gateway credentials and the client live on the runner. */
 const RUNNER_DIRECTORY = "${RUNNER_TEMP}/deploykit-gateway";
 const RUNNER_DIRECTORY_EXPRESSION = "${{ runner.temp }}/deploykit-gateway";
@@ -71,32 +68,12 @@ const JOB_TIMEOUT_MINUTES = 60;
 
 const HEREDOC_DELIMITER = "DEPLOYKIT_GATEWAY_CLIENT";
 
-/**
- * The package root is found by walking up until the asset is actually there,
- * rather than by assuming a fixed depth: this module is loaded from
- * `src/orchestrator/` under test, from `dist/chunks/` when the CLI is bundled,
- * and from `dist/` when it is not, and a hard-coded `../..` is right for only
- * one of them.
- */
 function modulePackageRoot(): string {
-  const moduleUrl: string | undefined = import.meta.url;
-  if (!moduleUrl) {
-    throw new DeployKitError(
-      "DK_UNSUPPORTED",
-      "The managed workflow template is unavailable in the standalone VPS runtime",
-    );
-  }
-  let directory = dirname(fileURLToPath(moduleUrl));
-  for (let depth = 0; depth <= PACKAGE_ROOT_SEARCH_DEPTH; depth += 1) {
-    if (existsSync(resolve(directory, MANAGED_WORKFLOW_ASSET))) return directory;
-    const parent = dirname(directory);
-    if (parent === directory) break;
-    directory = parent;
-  }
-  throw new DeployKitError(
-    "DK_UNSUPPORTED",
-    `The bundled ${MANAGED_WORKFLOW_ASSET} is not installed beside the DeployKit CLI`,
-  );
+  return resolvePackageRoot({
+    moduleUrl: import.meta.url,
+    markers: [MANAGED_WORKFLOW_ASSET],
+    subject: "managed workflow template",
+  });
 }
 
 export function resolveBundledGatewayClientPath(packageRoot = modulePackageRoot()): string {

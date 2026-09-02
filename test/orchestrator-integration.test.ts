@@ -457,18 +457,28 @@ describe("full orchestrator: secret canaries", () => {
 });
 
 describe("full orchestrator: phase boundary", () => {
-  it("keeps the production orchestrator out of the package API and the CLI", async () => {
+  it("routes the CLI at the production orchestrator and keeps it out of the package API", async () => {
     const index = await readFile("src/index.ts", "utf8");
     const cli = await readFile("src/cli.ts", "utf8");
-    for (const source of [index, cli]) {
-      expect(source).not.toContain("orchestrator/production");
-      expect(source).not.toContain("orchestrator/github-port");
-      expect(source).not.toContain("orchestrator/gateway-transport");
-      expect(source).not.toContain("orchestrator/operation-store");
-      expect(source).not.toContain("runProductionDeployment");
+
+    // Phase 13 cut `deploykit deploy` over to exactly this entrypoint.
+    expect(cli).toContain("orchestrator/production");
+    expect(cli).toContain("runProductionDeployment");
+    // ...and to nothing else. The CLI reaches the orchestrator through its one
+    // composition root, never by assembling adapters of its own.
+    expect(cli).not.toContain("orchestrator/github-port");
+    expect(cli).not.toContain("orchestrator/gateway-transport");
+    expect(cli).not.toContain("orchestrator/operation-store");
+
+    // The library surface is unchanged: the orchestrator is a product, not an
+    // API somebody else can wire up halfway.
+    for (const module of [
+      "orchestrator/production",
+      "orchestrator/github-port",
+      "orchestrator/gateway-transport",
+      "orchestrator/operation-store",
+    ]) {
+      expect(index).not.toContain(module);
     }
-    // Bare `deploykit deploy` still stops after compiling; Phase 13 owns the
-    // cutover, and `test/cli.test.ts` pins the DK_UNSUPPORTED result.
-    expect(cli).toContain("DK_UNSUPPORTED");
   });
 });

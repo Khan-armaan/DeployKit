@@ -38,6 +38,7 @@ import type {
   GatewayConnection,
   GitHubEnvironmentState,
   GitHubRepositoryFacts,
+  LegacyRunnerFacts,
   OrchestratorDependencies,
   OrchestratorProgressPhase,
   OrchestratorResult,
@@ -45,7 +46,7 @@ import type {
   WorkflowDispatchRequest,
   WorkflowRunState,
 } from "./dependencies.js";
-import { orchestratorError } from "./failures.js";
+import { RECOVERY_INSTRUCTIONS, orchestratorError } from "./failures.js";
 import {
   createDesiredStatePlanner,
   gatewayBindingIdentityDigest,
@@ -108,8 +109,15 @@ export interface OrchestratorRunOptions {
   readonly planner?: DesiredStatePlanner;
   /** Phase 10 owns the managed workflow bytes. */
   readonly renderWorkflow?: (context: DeploymentContext) => string;
-  /** Phase 8 owns the checksum-verified standalone server bundle. */
-  readonly runtimeBundle: RuntimeBundleReference;
+  /**
+   * Phase 8 owns the checksum-verified standalone server bundle. A function is
+   * resolved once, on first use — which is *after* the config has been
+   * scaffolded, read, and validated. Packing the bundle eagerly would make a
+   * first run wait on `npm pack` before being told to fill in its config, and
+   * would report a packaging failure in place of the config error that
+   * actually stopped the run.
+   */
+  readonly runtimeBundle: RuntimeBundleReference | (() => Promise<RuntimeBundleReference>);
   /** Phase 8/11 own gateway host facts and the gateway Environment secret. */
   readonly gatewayAccess: GatewayAccessProvider;
   /** Runs the existing filesystem/package/Compose project checks. Default on. */
@@ -117,6 +125,24 @@ export interface OrchestratorRunOptions {
   readonly inspectComposeConfig?: boolean;
   readonly requiredVersion?: string;
   readonly polling?: OrchestratorPollingOptions;
+  /**
+   * Phase 13's in-command approval for retiring a v0.1.x root Actions runner.
+   * Absent means refused: a runner is never removed because nobody was asked.
+   */
+  readonly approveLegacyRunnerRemoval?: (
+    request: LegacyRunnerApprovalRequest,
+  ) => Promise<boolean>;
+}
+
+/** Everything an operator needs to decide whether the old runner may go. */
+export interface LegacyRunnerApprovalRequest {
+  readonly host: string;
+  readonly repository: string;
+  readonly targetName: string;
+  readonly runnerRoot: string;
+  readonly runnerName: string | null;
+  readonly serviceUnit: string | null;
+  readonly serviceActive: boolean;
 }
 
 /**
@@ -353,14 +379,28 @@ export async function runDeployment(
 ): Promise<OrchestratorResult> {
   const dryRun = options.dryRun === true;
   const polling = { ...DEFAULT_POLLING, ...options.polling };
-  const planner =
-    options.planner ??
-    createDesiredStatePlanner({
-      // Phase 10 owns these bytes; the bundled renderer is the default so a
-      // caller cannot accidentally reconcile a workflow of its own invention.
-      renderWorkflow: options.renderWorkflow ?? createManagedWorkflowRenderer(),
-      runtimeBundle: options.runtimeBundle,
-    });
+
+  // Both are resolved on first use and memoized. Nothing below the config step
+  // needs either, and the config step must be able to fail on its own terms.
+  let resolvedBundle: RuntimeBundleReference | undefined;
+  const bundle = async (): Promise<RuntimeBundleReference> => {
+    resolvedBundle ??= typeof options.runtimeBundle === "function"
+      ? await options.runtimeBundle()
+      : options.runtimeBundle;
+    return resolvedBundle;
+  };
+
+  let resolvedPlanner: DesiredStatePlanner | undefined;
+  const plan = async (): Promise<DesiredStatePlanner> => {
+    resolvedPlanner ??= options.planner ??
+      createDesiredStatePlanner({
+        // Phase 10 owns these bytes; the bundled renderer is the default so a
+        // caller cannot accidentally reconcile a workflow of its own invention.
+        renderWorkflow: options.renderWorkflow ?? createManagedWorkflowRenderer(),
+        runtimeBundle: await bundle(),
+      });
+    return resolvedPlanner;
+  };
 
   const emit = (
     level: "info" | "warning",
@@ -584,7 +624,7 @@ export async function runDeployment(
 
     // ------------------------------------------------------ control artifacts --
 
-    const desiredArtifacts = planner.controlArtifacts(context);
+    const desiredArtifacts = (await plan()).controlArtifacts(context);
     let artifactsState = await deps.github.inspectControlArtifacts(desiredArtifacts);
     if (artifactsState.status === "conflict") {
       throw ownershipConflict(`${config.project.repository} holds control artifacts DeployKit does not own`);
@@ -647,7 +687,7 @@ export async function runDeployment(
 
     // ---------------------------------------------------------------- gateway --
 
-    const expectedBinding = planner.gatewayBinding(context);
+    const expectedBinding = (await plan()).gatewayBinding(context);
     let handshake = await deps.administratorSsh.inspectGateway(connection, expectedBinding);
     if (
       handshake !== undefined &&
@@ -670,12 +710,13 @@ export async function runDeployment(
       // Bootstrap is idempotent for an identical binding and is the only
       // operation that returns the VPS-held repository public key the next step
       // needs, so it runs on every real invocation.
+      const runtimeBundle = await bundle();
       const bootstrap = await deps.administratorSsh.bootstrapGateway({
         connection,
         binding: expectedBinding,
-        packageFile: options.runtimeBundle.packageFile,
-        packageName: options.runtimeBundle.packageName,
-        packageSha256: options.runtimeBundle.packageSha256,
+        packageFile: runtimeBundle.packageFile,
+        packageName: runtimeBundle.packageName,
+        packageSha256: runtimeBundle.packageSha256,
         configureFirewall: config.server.configureFirewall === true,
       });
       handshake = bootstrap.handshake;
@@ -709,11 +750,54 @@ export async function runDeployment(
     };
     await persist("pending");
 
+    // ---------------------------------------------------------- legacy runner --
+
+    // A host enrolled by DeployKit v0.1.x still carries a repository-scoped
+    // GitHub Actions runner running as root. The replacement gateway has just
+    // been installed and answered a real handshake, so the migration is offered
+    // only now — and only with the operator's explicit consent inside this same
+    // invocation. Nothing here is ever silent, and nothing is ever deleted.
+    if (deps.administratorSsh.inspectLegacyRunner !== undefined) {
+      const legacy = await deps.administratorSsh.inspectLegacyRunner(connection, context.repository);
+      if (legacy.present) {
+        await emit(
+          "warning",
+          "legacy-runner",
+          "DK_LEGACY_RUNNER_DETECTED",
+          `${connection.host} still runs the v0.1 repository-scoped Actions runner as root at ${legacy.root ?? "an unknown path"}`,
+        );
+        if (dryRun) {
+          await emit(
+            "info",
+            "legacy-runner",
+            "DK_DRY_RUN_PENDING",
+            `Would ask for approval to stop and unregister the legacy Actions runner on ${connection.host}`,
+          );
+        } else {
+          // Asserted rather than assumed from the flow above: the operator is
+          // never asked to give up the old path before the new one answered.
+          if (!run.readiness.gateway.ready) {
+            throw notReady(`the replacement gateway on ${connection.host} was not verified before the legacy runner could be retired`);
+          }
+          await retireLegacyRunner(deps, {
+            connection,
+            context,
+            legacy,
+            ...(options.approveLegacyRunnerRemoval === undefined
+              ? {}
+              : { approve: options.approveLegacyRunnerRemoval }),
+            emit,
+          });
+          await persist("pending");
+        }
+      }
+    }
+
     // --------------------------------------------------------- repository key --
 
     let deployKeyState: RepositoryDeployKeyState | undefined;
     if (!dryRun && repositoryPublicKey !== null && repositoryPublicKeyFingerprint !== null) {
-      const desiredKey = planner.repositoryDeployKey(context, {
+      const desiredKey = (await plan()).repositoryDeployKey(context, {
         publicKey: repositoryPublicKey,
         publicKeyFingerprint: repositoryPublicKeyFingerprint,
       });
@@ -808,7 +892,7 @@ export async function runDeployment(
         }),
       );
       access = gatewaySession.facts;
-      desiredEnvironment = planner.environment(context, access);
+      desiredEnvironment = (await plan()).environment(context, access);
       environmentState = await deps.github.inspectEnvironment(desiredEnvironment);
       if (environmentState.status === "conflict") {
         throw orchestratorError(
@@ -925,7 +1009,7 @@ export async function runDeployment(
     }
     if (deployKeyState !== undefined) {
       const recheckKey = await deps.github.inspectRepositoryDeployKey(
-        planner.repositoryDeployKey(context, {
+        (await plan()).repositoryDeployKey(context, {
           publicKey: repositoryPublicKey ?? "",
           publicKeyFingerprint: repositoryPublicKeyFingerprint ?? "",
         }),
@@ -1123,6 +1207,118 @@ function notReady(reason: string): DeployKitError {
   return orchestratorError(
     "DK_DISPATCH_NOT_READY",
     `Nothing was dispatched because ${reason}; run the same command again`,
+  );
+}
+
+type Emitter = (
+  level: "info" | "warning",
+  phase: OrchestratorProgressPhase,
+  code: string,
+  message: string,
+) => void | Promise<void>;
+
+/**
+ * Retires a DeployKit v0.1.x root Actions runner, in the only order that is
+ * safe: the replacement gateway is already installed and proven by a handshake
+ * before this is reached, the operator is asked in this same invocation, the
+ * host's service is stopped and disabled while every file it owns is left
+ * exactly where it is, and only then is the registration removed from GitHub
+ * and its absence re-read from GitHub itself.
+ *
+ * Refusing is a complete answer. A denied approval stops the deployment rather
+ * than continuing beside a root runner, and it removes nothing, so the host is
+ * in precisely the state it was before the question was asked.
+ */
+async function retireLegacyRunner(
+  deps: OrchestratorDependencies,
+  request: {
+    readonly connection: AdministratorSshConnection;
+    readonly context: DeploymentContext;
+    readonly legacy: LegacyRunnerFacts;
+    readonly approve?: (approval: LegacyRunnerApprovalRequest) => Promise<boolean>;
+    readonly emit: Emitter;
+  },
+): Promise<void> {
+  const { connection, context, legacy, emit } = request;
+  const retire = deps.administratorSsh.retireLegacyRunner;
+  const listRunners = deps.github.listSelfHostedRunners;
+  const deleteRunner = deps.github.deleteSelfHostedRunner;
+  if (retire === undefined || listRunners === undefined || deleteRunner === undefined) {
+    throw new DeployKitError(
+      "DK_UNSUPPORTED",
+      `This DeployKit build cannot migrate the legacy Actions runner on ${connection.host}.`,
+    );
+  }
+
+  // Correlation is checked before anything is touched. Stopping a service whose
+  // GitHub registration DeployKit cannot then find would leave the repository
+  // still routing jobs at a host that can no longer answer them.
+  if (legacy.agentId === null && legacy.agentName === null) {
+    throw orchestratorError(
+      "DK_OWNERSHIP_CONFLICT",
+      `The legacy Actions runner on ${connection.host} does not identify its GitHub registration, so DeployKit cannot prove that unregistering it removed the right one`,
+      { details: { host: connection.host, runnerRoot: legacy.root } },
+    );
+  }
+
+  const approved = await request.approve?.({
+    host: connection.host,
+    repository: context.repository,
+    targetName: context.targetName,
+    runnerRoot: legacy.root ?? "",
+    runnerName: legacy.agentName,
+    serviceUnit: legacy.serviceUnit,
+    serviceActive: legacy.serviceActive,
+  });
+  if (approved !== true) {
+    throw new DeployKitError(
+      "DK_SECURITY_ACK_REQUIRED",
+      `${connection.host} still runs the v0.1 root Actions runner. DeployKit will not remove it without explicit approval, and will not deploy beside it.`,
+      {
+        details: {
+          boundary: "gateway-bootstrap",
+          recovery: "not-resumable" satisfies RecoveryAction,
+          resume: RECOVERY_INSTRUCTIONS["not-resumable"],
+          mutation: "owned-only",
+          host: connection.host,
+          runnerRoot: legacy.root,
+          runnerName: legacy.agentName,
+        },
+      },
+    );
+  }
+
+  const retirement = await retire(connection, legacy);
+  await emit(
+    "info",
+    "legacy-runner",
+    "DK_LEGACY_RUNNER_STOPPED",
+    `Stopped and disabled the legacy Actions runner service on ${connection.host}; its files at ${retirement.root} were retained for recovery`,
+  );
+
+  const matches = (entry: { readonly id: number; readonly name: string }): boolean =>
+    (legacy.agentId !== null && entry.id === legacy.agentId) ||
+    (legacy.agentName !== null && entry.name === legacy.agentName);
+
+  for (const registration of (await listRunners(context.repository)).filter(matches)) {
+    await deleteRunner(context.repository, registration.id);
+  }
+
+  // GitHub's own listing is the proof, not the delete's exit status.
+  const remaining = (await listRunners(context.repository)).filter(matches);
+  if (remaining.length > 0) {
+    throw orchestratorError(
+      "DK_GATEWAY_BOOTSTRAP_FAILED",
+      `${context.repository} still lists the legacy self-hosted runner after it was unregistered, so jobs could still be routed to ${connection.host}`,
+      { details: { host: connection.host, remaining: remaining.map((entry) => entry.id) } },
+    );
+  }
+
+  await emit(
+    "info",
+    "legacy-runner",
+    "DK_LEGACY_RUNNER_RETIRED",
+    `${context.repository} no longer routes jobs to ${connection.host}; the retired runner's files remain at ${retirement.root}`,
   );
 }
 

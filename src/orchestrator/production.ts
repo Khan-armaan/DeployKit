@@ -21,6 +21,7 @@ import {
   type GatewayAccessProvider,
   type GatewayAccessRequest,
   type GatewayAccessSession,
+  type LegacyRunnerApprovalRequest,
   type OrchestratorPollingOptions,
 } from "./deploy.js";
 import { createGatewayKeyRotator, type GatewayKeyPairGenerator } from "./gateway-keys.js";
@@ -48,10 +49,12 @@ import { resolveRuntimeBundle } from "./runtime-bundle.js";
  * anything when `dryRun` is set, and returns no facts at all, so the state
  * machine reports what it would reconcile instead of touching a host.
  *
- * This module is deliberately unreachable from `src/index.ts` and from
- * `src/cli.ts`. Phase 13 owns the cutover; until then `deploykit deploy` still
- * stops after compiling, and the only caller of {@link runProductionDeployment}
- * is the hermetic integration suite.
+ * Phase 13 made this the product. Bare `deploykit deploy` now calls
+ * {@link runProductionDeployment} with the operator's `--config`, `--dry-run`,
+ * and `--no-wait` choices and its own reporter; the hermetic integration suite
+ * calls the same function with the two process boundaries replaced. Nothing
+ * else changed, which is the point: the CLI supplies flags and a prompt, not
+ * behavior.
  */
 
 export interface ProductionRunnerOverrides {
@@ -76,8 +79,11 @@ export interface ProductionDeploymentOptions extends ProductionRunnerOverrides {
   readonly reporter?: Reporter;
   readonly confirm?: (message: string) => Promise<boolean>;
   readonly interactive?: boolean;
-  /** Packed once by the caller when a suite must not shell out to `npm pack`. */
-  readonly runtimeBundle?: RuntimeBundleReference;
+  /**
+   * Packed once by the caller when a suite must not shell out to `npm pack`.
+   * A function is called on first use, which is after the config is valid.
+   */
+  readonly runtimeBundle?: RuntimeBundleReference | (() => Promise<RuntimeBundleReference>);
   readonly polling?: OrchestratorPollingOptions;
   readonly requiredVersion?: string;
   readonly validateSource?: boolean;
@@ -87,6 +93,14 @@ export interface ProductionDeploymentOptions extends ProductionRunnerOverrides {
   /** How often the setup pull request is re-read while it awaits review. */
   readonly pollIntervalMs?: number;
   readonly maxWaitMs?: number;
+  /**
+   * Asked before a DeployKit v0.1.x root Actions runner is stopped and
+   * unregistered. Absent means refused; the CLI supplies the interactive
+   * prompt.
+   */
+  readonly approveLegacyRunnerRemoval?: (
+    request: LegacyRunnerApprovalRequest,
+  ) => Promise<boolean>;
 }
 
 export interface ProductionOrchestrator {
@@ -232,14 +246,18 @@ export async function runProductionDeployment(
 
   let temporaryBundleRoot: string | undefined;
   try {
-    let runtimeBundle = options.runtimeBundle;
-    if (runtimeBundle === undefined) {
+    // Packed on demand rather than up front. The state machine asks for the
+    // bundle at the gateway step, so a run that stops at a missing or invalid
+    // config never pays for `npm pack` — and never reports a packaging failure
+    // in place of the config error that actually stopped it.
+    const provided = options.runtimeBundle;
+    const runtimeBundle = provided ?? (async (): Promise<RuntimeBundleReference> => {
       temporaryBundleRoot = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), "deploykit-bundle-"));
-      runtimeBundle = await resolveRuntimeBundle({
+      return resolveRuntimeBundle({
         destination: temporaryBundleRoot,
         ...(options.packageRoot === undefined ? {} : { packageRoot: options.packageRoot }),
       });
-    }
+    });
 
     return await runDeployment(orchestrator.dependencies, {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
@@ -252,6 +270,9 @@ export async function runProductionDeployment(
       ...(options.inspectComposeConfig === undefined
         ? {}
         : { inspectComposeConfig: options.inspectComposeConfig }),
+      ...(options.approveLegacyRunnerRemoval === undefined
+        ? {}
+        : { approveLegacyRunnerRemoval: options.approveLegacyRunnerRemoval }),
       runtimeBundle,
       gatewayAccess: orchestrator.gatewayAccess,
     });

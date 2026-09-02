@@ -115,6 +115,15 @@ interface WorkflowRunRecord {
   inputs: Readonly<Record<string, string>>;
 }
 
+/** A repository-scoped self-hosted runner registration GitHub still lists. */
+export interface SelfHostedRunnerRecord {
+  id: number;
+  name: string;
+  status: string;
+  busy: boolean;
+  labels: readonly string[];
+}
+
 export interface HermeticGitHubOptions {
   readonly repository: string;
   readonly defaultBranch?: string;
@@ -139,6 +148,8 @@ export class HermeticGitHub implements GitHubCommandRunner {
   readonly deployKeys: DeployKeyRecord[] = [];
   readonly environments = new Map<string, EnvironmentRecord>();
   readonly runs: WorkflowRunRecord[] = [];
+  /** Legacy self-hosted runners; empty on every host this release bootstrapped. */
+  readonly selfHostedRunners: SelfHostedRunnerRecord[] = [];
   readonly repository: string;
   readonly defaultBranch: string;
 
@@ -475,6 +486,27 @@ export class HermeticGitHub implements GitHubCommandRunner {
       const matching = this.runs.filter((run) => run.path === `.github/workflows/${file}`);
       return { total_count: matching.length, workflow_runs: matching.map((run) => this.runBody(run)) };
     }
+    if (rest === "actions/runners" && method === "GET") {
+      return {
+        total_count: this.selfHostedRunners.length,
+        runners: this.selfHostedRunners.map((runner) => ({
+          id: runner.id,
+          name: runner.name,
+          os: "linux",
+          status: runner.status,
+          busy: runner.busy,
+          labels: runner.labels.map((name) => ({ id: 1, name, type: "custom" })),
+        })),
+      };
+    }
+    if (rest.startsWith("actions/runners/") && method === "DELETE") {
+      this.gate("runner.delete");
+      const id = Number(rest.slice("actions/runners/".length));
+      const index = this.selfHostedRunners.findIndex((runner) => runner.id === id);
+      if (index < 0) return undefined;
+      this.selfHostedRunners.splice(index, 1);
+      return {};
+    }
     if (rest.startsWith("actions/runs/") && method === "GET") {
       const id = Number(rest.slice("actions/runs/".length));
       // Each read advances the run one step, so following it terminates.
@@ -561,9 +593,28 @@ export interface HostBinding {
   readonly runtimeBundleSha256: string;
 }
 
+/**
+ * A DeployKit v0.1.x root Actions runner, as it actually sits on a host that an
+ * earlier release enrolled: a directory under `/opt/actions-runner`, its own
+ * `.runner` registration, and a systemd unit named by `.service`.
+ */
+export interface LegacyRunnerState {
+  directory: string;
+  agentId: number;
+  agentName: string;
+  gitHubUrl: string;
+  serviceUnit: string;
+  serviceActive: boolean;
+  serviceEnabled: boolean;
+  /** Set when the test wants the registration file to be unreadable JSON. */
+  malformed?: boolean;
+}
+
 export interface HermeticHostOptions {
   readonly host: string;
   readonly repository: string;
+  /** Absent on every host this release bootstrapped. */
+  readonly legacyRunner?: LegacyRunnerState;
   /** The deployment result the gateway reports for an `inspect`. */
   readonly deployment?: Partial<GatewayDeploymentResult>;
 }
@@ -583,6 +634,8 @@ export class HermeticHost implements AdministratorCommandRunner {
   failAt: string | null = null;
   /** Set to refuse the source probe with the frozen "wrong identity" status. */
   sourceProbeIdentity: string | null = null;
+  /** Mutated in place by the retirement, exactly as systemctl would. */
+  legacyRunner: LegacyRunnerState | null = null;
 
   readonly hostKeyLine: string;
   readonly repositoryPublicKey: string;
@@ -590,6 +643,7 @@ export class HermeticHost implements AdministratorCommandRunner {
   constructor(private readonly options: HermeticHostOptions) {
     this.hostKeyLine = `${options.host} ssh-ed25519 ${keyMaterial(`host:${options.host}`)}`;
     this.repositoryPublicKey = `ssh-ed25519 ${keyMaterial(`repo:${options.repository}`)}`;
+    this.legacyRunner = options.legacyRunner ?? null;
   }
 
   get repositoryPublicKeyFingerprint(): string {
@@ -650,7 +704,58 @@ export class HermeticHost implements AdministratorCommandRunner {
     if (argv[0] === "sudo" && argv[2] === "/usr/local/lib/deploykit/gateway-source-probe") {
       return this.sourceProbe(argv);
     }
+    if (argv[0] === "sudo" && (argv[2] === "ls" || argv[2] === "cat" || argv[2] === "systemctl")) {
+      return this.legacyRunnerCommand(argv);
+    }
     return { stdout: "", stderr: "command not found", exitCode: 127 };
+  }
+
+  /** `/opt/actions-runner` as a v0.1.x host actually presents it over ssh. */
+  private legacyRunnerCommand(argv: readonly string[]): AdministratorRunResult {
+    const runner = this.legacyRunner;
+    const verb = argv[2];
+    const operand = argv[argv.length - 1] ?? "";
+
+    if (verb === "ls") {
+      if (runner === null) return { stdout: "", stderr: "No such file or directory", exitCode: 2 };
+      return ok(`${runner.directory}\n`);
+    }
+    if (verb === "cat") {
+      if (runner === null) return { stdout: "", stderr: "No such file or directory", exitCode: 1 };
+      const root = `/opt/actions-runner/${runner.directory}`;
+      if (operand === `${root}/.runner`) {
+        if (runner.malformed === true) return ok("{not json\n");
+        return ok(`${JSON.stringify({
+          agentId: runner.agentId,
+          agentName: runner.agentName,
+          poolId: 1,
+          serverUrl: "https://pipelines.actions.githubusercontent.com/",
+          gitHubUrl: runner.gitHubUrl,
+          workFolder: "_work",
+          disableUpdate: true,
+        })}\n`);
+      }
+      if (operand === `${root}/.service`) return ok(`${runner.serviceUnit}\n`);
+      return { stdout: "", stderr: "No such file or directory", exitCode: 1 };
+    }
+
+    const action = argv[3];
+    if (runner === null || operand !== runner.serviceUnit) {
+      return { stdout: "", stderr: "Unit not found", exitCode: 4 };
+    }
+    if (action === "is-active") {
+      return runner.serviceActive ? ok("active\n") : { stdout: "inactive\n", stderr: "", exitCode: 3 };
+    }
+    if (action === "stop") {
+      this.gate("legacy-runner.stop");
+      runner.serviceActive = false;
+      return ok("");
+    }
+    if (action === "disable") {
+      runner.serviceEnabled = false;
+      return ok("");
+    }
+    return { stdout: "", stderr: "unsupported systemctl verb", exitCode: 1 };
   }
 
   private bootstrap(argv: readonly string[]): AdministratorRunResult {

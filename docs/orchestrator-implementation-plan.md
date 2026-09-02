@@ -514,6 +514,16 @@ Completion gate:
 - Fresh installs contain no root runner; legacy migration is approval-gated and recoverable.
 - `deploykit deploy` is not advertised as complete until Phase 14 acceptance passes.
 
+Delivered by: `src/cli.ts` (the cutover, `configDeploymentOptions`, and `runConfigDeployment`), `src/orchestrator/deploy.ts` (the legacy-runner migration step and its approval hook), `src/orchestrator/administrator-ssh.ts` (`LegacyRunnerPort`), `src/orchestrator/github.ts` and `github-port.ts` (the read-only runner census and its deletion), `test/cli-deploy.test.ts`, and the rewritten `README.md`, `AGENTS.md`, `SECURITY.md`, `docs/manifest.md`, and `docs/acceptance.md`.
+
+Bare `deploykit deploy` is now the config-driven orchestrator and `DK_UNSUPPORTED` is gone from that path. The CLI contributes flags and two prompts and nothing else: `configDeploymentOptions` is a pure translation that leaves an absent flag absent, so the orchestrator's defaults stay the single definition of the default path, and the command reaches the orchestrator only through `src/orchestrator/production.ts`. The legacy `deploykit.yaml` commands stay reachable and stay opt-in — only `--target`, `--ref`, or `--repo` selects them, and mixing `--config` with them is a usage error rather than a silent choice between two products.
+
+The legacy-runner migration is the phase's only new boundary, and its order is the security property rather than a convenience. The replacement gateway is installed *and handshaked* before the operator is asked anything, the question is asked inside the same invocation, and a non-interactive session refuses — so a migration cannot be approved by omission. A refusal raises `DK_SECURITY_ACK_REQUIRED` with recovery `not-resumable`, removes nothing, and dispatches nothing, because continuing would silently deploy beside the trust model this release exists to replace.
+
+Two checks happen before anything is touched. The runner's GitHub registration must be identifiable from its own `.runner` file, because stopping a service whose registration could not then be removed leaves the repository routing jobs at a host that can no longer answer them — strictly worse than leaving it alone. And the recorded `gitHubUrl` must name *this* repository, so another repository's runner on the same host is never read further, stopped, or reported. Retirement is a stop and a disable; nothing under `/opt/actions-runner` is deleted, moved, or rewritten, and the proof that routing has stopped is GitHub's own runner listing re-read after the delete rather than the delete's exit status.
+
+No failure code was added. The frozen catalog already had a code for each of these — an unidentifiable registration is an ownership conflict, a service that survives being stopped is a gateway-bootstrap failure, and the approval refusal reuses the existing `DK_SECURITY_ACK_REQUIRED` with explicit recovery details — so the pinned contract digest is unchanged. Both migration operations are optional on `GitHubPort` and `AdministratorSshPort`, so every adapter written before this phase remains valid.
+
 ### Phase 14 — Package verification, disposable-VPS acceptance, and release
 
 Depends on: Phase 13 complete.
@@ -541,6 +551,16 @@ Completion gate:
 - No repository-controlled root runner is present on fresh hosts, and migrated hosts no longer route jobs to the legacy runner.
 - Only after this gate may the config-driven orchestrator be described as production-ready.
 
+Delivered by: `test/package.test.ts` (deliverables 1, 2, 3, 9, and 10), `src/package-root.ts`, and the Phase 14 progress table in `docs/acceptance.md`. Deliverables 4-8 remain outstanding: they require disposable Ubuntu 22.04/24.04 amd64/arm64 hosts, staging DNS, and Let's Encrypt staging, which no workstation or ordinary CI run can provide.
+
+`npm run check` now builds *before* it tests, so the packaged suite verifies this commit's artifact rather than the previous one — and so a suite that packs the package cannot race a rebuild that deleted `dist/` underneath it.
+
+Deliverable 3 justified itself immediately. Installing the real tarball into an isolated prefix and running the *installed* binary found a packaged CLI that failed on its very first command: `src/orchestrator/config-file.ts` and `src/orchestrator/runtime-bundle.ts` located the package root with a hard-coded `../..`, which is correct from `src/<area>/` and one level too high from the bundled `dist/`, so a scoped install resolved the root to the `@scope` directory. Every source-tree test passed while the shipped artifact could neither scaffold a config nor pack its own runtime bundle. Phase 10 had already solved this correctly in `src/orchestrator/workflow.ts` by walking up until the asset is actually present; `src/package-root.ts` is that approach extracted, and all three call sites now share it. Both markers are required at each call site, because a lone `package.json` also matches a scope directory — the exact wrong answer this replaces.
+
+Two more defects surfaced from the same run. In `--json` mode a *failed* deployment still printed an `{"ok": true}` result envelope beside its error, so a consumer keying off `ok` would read a failure as a success; `Reporter.result` now takes the outcome's truth from its caller, and the orchestrator reports `ok` only for `succeeded`, `dispatched`, and `dry-run`. And the runtime bundle was packed before the config was read at all, so a first run waited on `npm pack` before being told to fill in its config, and a packaging failure was reported in place of the config error that actually stopped the run. `OrchestratorRunOptions.runtimeBundle` now also accepts a function, resolved once on first use at the gateway step; the Phase 4 contract is widened rather than changed, so every existing caller is untouched.
+
+The package API was curated rather than left accidental. `src/index.ts` now exports the deployment contract — the versioned shapes, the canonical bytes and digest, the config loader/parser/compiler, the compiled-project validator, and the `DK_*` failure and recovery catalog — so a consumer can validate a config or interpret `--json` output. The composition root, the GitHub/SSH/gateway adapters, and the operation store stay out, and `test/package.test.ts` asserts both halves of that boundary.
+
 ## Phase tracker
 
 | Order | Phase | Status |
@@ -557,8 +577,8 @@ Completion gate:
 | 10 | Control artifacts/setup PR | Complete |
 | 11 | Cross-plane keys/Environment | Complete |
 | 12 | Full orchestration/dispatch | Complete |
-| 13 | CLI cutover/migration/docs | Planned |
-| 14 | Package acceptance/release | Planned |
+| 13 | CLI cutover/migration/docs | Complete |
+| 14 | Package/acceptance/release | Automated gates complete; disposable-VPS matrix outstanding |
 
 For each phase, follow the same closeout sequence:
 

@@ -10,6 +10,7 @@ import type {
   GitHubRepositoryFacts,
   GitHubResolvedCommit,
   RepositoryDeployKeyState,
+  SelfHostedRunnerRegistration,
   WorkflowDispatchReceipt,
   WorkflowDispatchRequest,
   WorkflowRunIdentity,
@@ -255,6 +256,14 @@ export function createGitHubPort(options: GitHubPortOptions = {}): GitHubPort {
         `Workflow run ${String(identity.id)} could not be read back from GitHub`,
         { details: { run: identity.url } },
       );
+    },
+
+    async listSelfHostedRunners(repository: string): Promise<readonly SelfHostedRunnerRegistration[]> {
+      return client.listSelfHostedRunners(repository);
+    },
+
+    async deleteSelfHostedRunner(repository: string, runnerId: number): Promise<void> {
+      await client.deleteSelfHostedRunner(repository, runnerId);
     },
   };
 }

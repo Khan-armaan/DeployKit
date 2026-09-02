@@ -432,6 +432,20 @@ export interface GitHubDeployKey {
   readonly readOnly: boolean;
 }
 
+/**
+ * A repository-scoped self-hosted runner registration. DeployKit never creates
+ * one; it reads this listing only to prove that a migrated host has stopped
+ * being a place GitHub can route a job to.
+ */
+export interface GitHubSelfHostedRunner {
+  readonly id: number;
+  readonly name: string;
+  /** GitHub reports `online` or `offline`; neither is coerced. */
+  readonly status: string;
+  readonly busy: boolean;
+  readonly labels: readonly string[];
+}
+
 export const WORKFLOW_RUN_STATUSES: ReadonlySet<string> = new Set([
   "queued", "in_progress", "completed", "waiting", "requested", "pending",
 ]);
@@ -527,6 +541,11 @@ export interface GitHubClient {
   listDeployKeys(repository: string): Promise<readonly GitHubDeployKey[]>;
   createDeployKey(repository: string, title: string, publicKey: string): Promise<GitHubDeployKey>;
   deleteDeployKey(repository: string, keyId: number): Promise<void>;
+
+  /** Read-only census of repository-scoped self-hosted runners. */
+  listSelfHostedRunners(repository: string): Promise<readonly GitHubSelfHostedRunner[]>;
+  /** Unregisters one runner so GitHub stops routing jobs to it. */
+  deleteSelfHostedRunner(repository: string, runnerId: number): Promise<void>;
 
   dispatchWorkflow(request: GitHubWorkflowDispatch): Promise<void>;
   listWorkflowRuns(query: GitHubWorkflowRunQuery): Promise<readonly GitHubWorkflowRun[]>;
@@ -771,6 +790,19 @@ export function createGitHubClient(options: GitHubClientOptions = {}): GitHubCli
       title: readOptionalString(source, "title") ?? "",
       key: readString(source, "key"),
       readOnly: readBoolean(source, "read_only"),
+    };
+  }
+
+  function toSelfHostedRunner(source: JsonObject): GitHubSelfHostedRunner {
+    return {
+      id: readNumber(source, "id"),
+      name: readString(source, "name"),
+      status: readString(source, "status"),
+      busy: readBoolean(source, "busy", false),
+      labels: readArray(source, "labels").map((entry) => {
+        if (!isJsonObject(entry)) throw apiFailure("A self-hosted runner label is not an object");
+        return readString(entry, "name");
+      }),
     };
   }
 
@@ -1196,6 +1228,27 @@ export function createGitHubClient(options: GitHubClientOptions = {}): GitHubCli
       await call({
         method: "DELETE",
         path: `repos/${encodePath(repository)}/keys/${String(keyId)}`,
+        absentOnNotFound: true,
+      });
+    },
+
+    async listSelfHostedRunners(repository: string): Promise<readonly GitHubSelfHostedRunner[]> {
+      assertRepository(repository);
+      const items = await paginate(`repos/${encodePath(repository)}/actions/runners`, {
+        collection: "runners",
+      });
+      return items.map(toSelfHostedRunner).sort((left, right) => left.id - right.id);
+    },
+
+    async deleteSelfHostedRunner(repository: string, runnerId: number): Promise<void> {
+      assertRepository(repository);
+      if (!Number.isInteger(runnerId) || runnerId < 1) {
+        throw apiFailure("The self-hosted runner id is not a positive integer");
+      }
+      await call({
+        method: "DELETE",
+        path: `repos/${encodePath(repository)}/actions/runners/${String(runnerId)}`,
+        // A registration that is already gone is the state this asked for.
         absentOnNotFound: true,
       });
     },

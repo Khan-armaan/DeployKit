@@ -19,7 +19,7 @@ That command must take responsibility for setup, validation, GitHub integration,
 
 Do not require users to manually chain `init`, `validate`, `plan`, `server bootstrap`, `secrets set`, `secrets check`, `retry`, `status`, or `logs`. These may remain optional diagnostics or internal/testable primitives, but they are not the primary workflow. End-user documentation must lead with the one-file/one-command experience.
 
-The current v0.1 implementation does not yet satisfy this contract. Contributors should reuse its deterministic server engine while replacing the multi-command onboarding and persistent self-hosted root runner described by the current source.
+`deploykit deploy` now implements this contract end to end; the disposable-VPS acceptance matrix in `docs/acceptance.md` is the remaining gate before it may be called production-ready. The legacy `deploykit.yaml` commands stay reachable for projects already on that path and must keep working, but they are never the documented flow and must never be selected implicitly.
 
 ## How the user receives the configuration file
 
@@ -100,7 +100,9 @@ One invocation is idempotent and performs the following sequence internally:
 9. On success, report the commit, HTTPS URL, allocated ports, and health status. On failure, report the failed phase and redacted evidence.
 10. When the same SHA has failed state, re-running `deploykit deploy` must resume safely without requiring a separate retry command.
 
-The public command can expose optional `--config`, `--dry-run`, `--no-wait`, and machine-readable output flags, but the defaults must implement the complete path. Do not make internal server subcommands part of normal usage.
+The public command exposes `--config`, `--dry-run`, `--no-wait`, `--json`, and `--verbose`; the defaults implement the complete path. Do not make internal server subcommands part of normal usage, and keep the flag-to-option translation a pure function so what a flag means is testable without a deployment.
+
+A host carrying a DeployKit v0.1.x root Actions runner is migrated inside this same invocation, in this order and no other: install and handshake the replacement gateway, ask the operator explicitly, stop and disable the old service while retaining every one of its files, then delete the GitHub registration and re-read GitHub's listing to prove the routing is gone. A refusal — including a non-interactive session, which always refuses — removes nothing and dispatches nothing. Never remove a runner silently, never remove one registered against another repository, and never stop a service whose GitHub registration cannot first be identified.
 
 ## Generated workflow and GitHub constraint
 
@@ -205,8 +207,8 @@ The remote runtime must:
 
 | Path | Current responsibility / required direction |
 | --- | --- |
-| `src/index.ts` | Curated package API; export the new config/compiler/orchestrator types intentionally. |
-| `src/cli.ts` | Keep thin; route public `deploy` to a new dependency-injected orchestrator. |
+| `src/index.ts` | Curated package API. The orchestrator's composition root, adapters, and operation store stay out of it: it is a product, not an API somebody can wire up halfway. |
+| `src/cli.ts` | Done: bare `deploy` routes to `src/orchestrator/production.ts` and contributes only flags, a redacting reporter, and the two prompts a terminal can answer. Reach the orchestrator through that one composition root, never by assembling adapters here. |
 | `src/manifest.ts`, `src/validation.ts`, `src/project-validation.ts` | Keep strict normalized validation; add compilation from the local config rather than accepting secret values in the runtime manifest. |
 | `src/plan.ts` | Describe the hosted runner, restricted SSH transport, automatic ports, and compiled manifest. |
 | `src/generators/github.ts` | Replace self-hosted jobs with the generic protected `ubuntu-latest` SSH workflow. |
@@ -246,7 +248,9 @@ During iteration, run the closest test file, then finish with:
 npm run check
 ```
 
-`npm run check` runs lint, strict typecheck, all Vitest suites, and the build. Use `npm test -- test/<feature>.test.ts` for focused runs.
+`npm run check` runs lint, strict typecheck, the build, and then all Vitest suites. The build comes before the tests on purpose: `test/package.test.ts` packs and installs the real tarball, so it must see this commit's `dist/`, and a suite that rebuilt mid-run would delete `dist/` underneath the other suites that pack the package. Use `npm test -- test/<feature>.test.ts` for focused runs.
+
+Source-tree tests do not prove the published artifact. A module sits at `src/<area>/` under test and at `dist/` or `dist/chunks/` once bundled, so never locate a package-relative file by a fixed depth — use `resolvePackageRoot` from `src/package-root.ts`, which walks up to markers only the root has. `test/package.test.ts` installs the tarball into an isolated prefix and drives the installed binary; keep it that way.
 
 Do not hand-edit or commit `dist/`, `coverage/`, `.deploykit/`, `*.tgz`, `*.tgz.sha256`, `.env*`, or `deploykit.config.yaml`. Change generators and source templates instead.
 
@@ -262,6 +266,9 @@ Tests for the one-command migration must cover:
 - stable automatic port increment/reuse under concurrency;
 - service/Nginx/TLS/health orchestration and redacted failure evidence;
 - same-SHA plus manifest-digest resume;
-- packed-artifact bootstrap smoke coverage.
+- packed-artifact bootstrap smoke coverage;
+- CLI parser, help, human/JSON output, and stable exit codes for every documented flag;
+- approval-gated, recoverable legacy-runner migration, and its absence on fresh hosts;
+- the packed allowlist, executable bits, installed-binary behavior, canary-free tarball, and version alignment.
 
-Existing high-value suites are `test/manifest.test.ts`, `test/validation.test.ts`, `test/plan.test.ts`, `test/generators.test.ts`, `test/fixtures.test.ts`, `test/server-state-secrets.test.ts`, `test/server-apply.test.ts`, `test/server-registry.test.ts`, `test/server-primitives.test.ts`, `test/production-driver.test.ts`, `test/bootstrap.test.ts`, `test/orchestrator-bootstrap.test.ts`, and `test/server-cli.test.ts`.
+Existing high-value suites are `test/cli-deploy.test.ts`, `test/orchestrator-integration.test.ts`, `test/manifest.test.ts`, `test/validation.test.ts`, `test/plan.test.ts`, `test/generators.test.ts`, `test/fixtures.test.ts`, `test/server-state-secrets.test.ts`, `test/server-apply.test.ts`, `test/server-registry.test.ts`, `test/server-primitives.test.ts`, `test/production-driver.test.ts`, `test/bootstrap.test.ts`, `test/orchestrator-bootstrap.test.ts`, and `test/server-cli.test.ts`.

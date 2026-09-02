@@ -24,6 +24,8 @@ import type {
   AdministratorSshPreflight,
   GatewayBootstrapRequest,
   GatewayBootstrapResult,
+  LegacyRunnerFacts,
+  LegacyRunnerRetirement,
 } from "./dependencies.js";
 import { orchestratorError } from "./failures.js";
 import { localPackageRoot } from "./runtime-bundle.js";
@@ -64,6 +66,15 @@ export const GATEWAY_KEYS_HELPER_PATH = "/usr/local/lib/deploykit/gateway-keys" 
 export const GATEWAY_SOURCE_PROBE_PATH = "/usr/local/lib/deploykit/gateway-source-probe" as const;
 export const GATEWAY_AUTHORIZED_KEYS_PATH =
   "/var/lib/deploykit-gateway/.ssh/authorized_keys" as const;
+
+/** Where a DeployKit v0.1.x bootstrap placed the repository-scoped root runner. */
+export const LEGACY_RUNNER_ROOT = "/opt/actions-runner" as const;
+
+/** The runner writes its own systemd unit name here; anything else is not it. */
+const LEGACY_SERVICE_UNIT_PATTERN = /^actions\.runner\.[A-Za-z0-9_.-]{1,180}\.service$/u;
+
+/** A `.runner` file DeployKit wrote is small; a large one is not one of ours. */
+const MAX_LEGACY_RUNNER_BYTES = 64 * 1024;
 
 /** Assets the installer needs beside the packed bundle. */
 export const BOOTSTRAP_ASSET_FILES: readonly string[] = Object.freeze([
@@ -357,9 +368,87 @@ export interface RepositorySourceProbePort {
   ): Promise<RepositoryAccessProof>;
 }
 
+/**
+ * Phase 13's legacy-runner migration, expressed as its own port for the same
+ * reason rotation is: retiring a v0.1.x root runner is not part of installing a
+ * gateway, but the mechanism belongs here because this is the boundary that
+ * already holds the operator's administrator key.
+ *
+ * Both operations are conservative. The inspection only reads, and the
+ * retirement only stops and disables a service — nothing under
+ * {@link LEGACY_RUNNER_ROOT} is deleted, moved, or rewritten, so an operator
+ * who needs the old path back has everything the runner had.
+ */
+export interface LegacyRunnerPort {
+  inspectLegacyRunner(
+    connection: AdministratorSshConnection,
+    repository: string,
+  ): Promise<LegacyRunnerFacts>;
+  retireLegacyRunner(
+    connection: AdministratorSshConnection,
+    facts: LegacyRunnerFacts,
+  ): Promise<LegacyRunnerRetirement>;
+}
+
+/**
+ * `LegacyRunnerPort` is deliberately *not* part of this intersection.
+ * {@link AdministratorSshPort} already declares both operations as optional, so
+ * an adapter written before the migration existed stays a valid boundary; the
+ * production port below is typed to implement them, which is where the
+ * guarantee belongs.
+ */
 export type AdministratorSshBoundary = AdministratorSshPort &
   GatewayKeyLifecyclePort &
   RepositorySourceProbePort;
+
+/** The absent answer, used whenever no `.runner` on this host names this repository. */
+export const NO_LEGACY_RUNNER: LegacyRunnerFacts = Object.freeze({
+  present: false,
+  root: null,
+  agentId: null,
+  agentName: null,
+  gitHubUrl: null,
+  serviceUnit: null,
+  serviceActive: false,
+});
+
+interface LegacyRunnerRegistration {
+  readonly agentId: number | null;
+  readonly agentName: string | null;
+  readonly gitHubUrl: string | null;
+}
+
+/**
+ * Reads the runner's own registration file. It is parsed leniently on purpose:
+ * a `.runner` DeployKit cannot fully understand still proves a runner is
+ * installed, and reporting it is what lets the operator be asked about it.
+ */
+export function parseLegacyRunnerRegistration(source: string): LegacyRunnerRegistration | undefined {
+  if (Buffer.byteLength(source, "utf8") > MAX_LEGACY_RUNNER_BYTES) return undefined;
+  let document: unknown;
+  try {
+    document = JSON.parse(source);
+  } catch {
+    return undefined;
+  }
+  if (typeof document !== "object" || document === null || Array.isArray(document)) return undefined;
+  const record = document as Record<string, unknown>;
+  const agentId = record["agentId"];
+  const agentName = record["agentName"];
+  const gitHubUrl = record["gitHubUrl"];
+  return {
+    agentId: typeof agentId === "number" && Number.isInteger(agentId) && agentId > 0 ? agentId : null,
+    agentName: typeof agentName === "string" && agentName !== "" ? agentName : null,
+    gitHubUrl: typeof gitHubUrl === "string" && gitHubUrl !== "" ? gitHubUrl : null,
+  };
+}
+
+/** True when the runner recorded the repository this deployment is bound to. */
+export function legacyRunnerServesRepository(gitHubUrl: string | null, repository: string): boolean {
+  if (gitHubUrl === null) return false;
+  const normalized = gitHubUrl.replace(/\/+$/u, "").toLowerCase();
+  return normalized === `https://github.com/${repository.toLowerCase()}`;
+}
 
 export function parseSourceProbeResult(stdout: string): RepositoryAccessProof {
   const line = stdout
@@ -453,7 +542,7 @@ export function parseBootstrapResult(stdout: string): BootstrapResultDocument {
 
 export function createAdministratorSshPort(
   options: AdministratorSshPortOptions = {},
-): AdministratorSshBoundary {
+): AdministratorSshBoundary & LegacyRunnerPort {
   const runner = options.runner ?? processAdministratorCommandRunner;
   const assetsDirectory = options.assetsDirectory ?? join(localPackageRoot(), "assets");
   const newRequestId = options.newRequestId ?? (() => randomUUID());
@@ -765,6 +854,85 @@ export function createAdministratorSshPort(
           );
         }
         return proof;
+      });
+    },
+
+    async inspectLegacyRunner(connection, repository): Promise<LegacyRunnerFacts> {
+      return withPinnedHostKey(connection, async (knownHostsFile) => {
+        const listing = await remote(connection, knownHostsFile, [
+          "sudo", "-n", "ls", "-1", LEGACY_RUNNER_ROOT,
+        ]);
+        // A host with no `/opt/actions-runner` is a host this release
+        // bootstrapped. That is the expected answer, not a failure.
+        if (listing.exitCode !== 0) return NO_LEGACY_RUNNER;
+
+        for (const name of listing.stdout.split(/\r?\n/).map((line) => line.trim())) {
+          if (name === "" || !/^[A-Za-z0-9_.-]{1,128}$/u.test(name) || name === "." || name === "..") continue;
+          const root = `${LEGACY_RUNNER_ROOT}/${name}`;
+          const registration = await remote(connection, knownHostsFile, [
+            "sudo", "-n", "cat", `${root}/.runner`,
+          ]);
+          if (registration.exitCode !== 0) continue;
+          const parsed = parseLegacyRunnerRegistration(registration.stdout);
+          if (parsed === undefined) continue;
+          // Only a runner registered against *this* repository is this
+          // deployment's business. Another repository's runner on the same host
+          // is somebody else's resource and is left entirely alone.
+          if (!legacyRunnerServesRepository(parsed.gitHubUrl, repository)) continue;
+
+          const service = await remote(connection, knownHostsFile, ["sudo", "-n", "cat", `${root}/.service`]);
+          const unit = service.exitCode === 0 ? service.stdout.trim() : "";
+          const serviceUnit = LEGACY_SERVICE_UNIT_PATTERN.test(unit) ? unit : null;
+          const active = serviceUnit === null
+            ? { exitCode: 1 }
+            : await remote(connection, knownHostsFile, ["sudo", "-n", "systemctl", "is-active", serviceUnit]);
+
+          return {
+            present: true,
+            root,
+            agentId: parsed.agentId,
+            agentName: parsed.agentName,
+            gitHubUrl: parsed.gitHubUrl,
+            serviceUnit,
+            serviceActive: active.exitCode === 0,
+          };
+        }
+        return NO_LEGACY_RUNNER;
+      });
+    },
+
+    async retireLegacyRunner(connection, facts): Promise<LegacyRunnerRetirement> {
+      const root = facts.root;
+      if (!facts.present || root === null) {
+        throw bootstrapFailure("No legacy Actions runner was found on this host to retire");
+      }
+      const unit = facts.serviceUnit;
+      if (unit === null || !LEGACY_SERVICE_UNIT_PATTERN.test(unit)) {
+        throw bootstrapFailure(
+          `The legacy runner at ${root} does not name a systemd unit DeployKit can stop`,
+          { host: connection.host },
+        );
+      }
+      return withPinnedHostKey(connection, async (knownHostsFile) => {
+        const stopped = await remote(connection, knownHostsFile, ["sudo", "-n", "systemctl", "stop", unit]);
+        const disabled = await remote(connection, knownHostsFile, ["sudo", "-n", "systemctl", "disable", unit]);
+        // The service's own claim is not trusted: it is asked again.
+        const active = await remote(connection, knownHostsFile, ["sudo", "-n", "systemctl", "is-active", unit]);
+        const serviceActive = active.exitCode === 0;
+        if (serviceActive) {
+          throw bootstrapFailure(
+            `The legacy Actions runner service on ${connection.host} is still active after being stopped`,
+            { host: connection.host, unit },
+          );
+        }
+        return {
+          stopped: stopped.exitCode === 0,
+          disabled: disabled.exitCode === 0,
+          serviceActive,
+          // Nothing under the runner root is removed; recovery stays possible.
+          filesRetained: true,
+          root,
+        };
       });
     },
   };

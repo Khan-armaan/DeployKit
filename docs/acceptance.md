@@ -2,9 +2,27 @@
 
 ## Status and scope
 
-The matrix in the next section is the **Phase 14 acceptance gate** for the one-file orchestrator and restricted gateway. Phases 1-12 have landed, so gateway installation, the root-owned binding, the staged/active key lifecycle, exact-SHA source retrieval, GitHub control-artifact review, cross-plane key rotation, Environment reconciliation, workflow dispatch, and run correlation are all real behavior a disposable host can now exercise. The one remaining gap is reachability: the completed orchestrator still sits behind an internal entrypoint, because Phase 13 owns the `deploykit deploy` cutover. The legacy instructions at the end of this file describe the v0.1 root-runner baseline and apply only to hosts enrolled by an earlier release.
+The matrix in the next section is the **Phase 14 acceptance gate** for the one-file orchestrator and restricted gateway. Phases 1-13 have landed, so every case below is now reachable exactly the way an operator reaches it: `deploykit deploy` performs gateway installation, the root-owned binding, the staged/active key lifecycle, exact-SHA source retrieval, GitHub control-artifact review, cross-plane key rotation, Environment reconciliation, workflow dispatch, run correlation, and the approval-gated legacy-runner migration. Nothing in this matrix requires a bootstrap, secret-upload, dispatch, retry, or status command. The legacy instructions at the end of this file describe the v0.1 root-runner baseline and apply only to hosts enrolled by an earlier release.
 
-## Planned Phase 14 disposable-VPS matrix
+## Phase 14 progress
+
+Phase 14 splits cleanly into what a workstation can prove and what only a real host can.
+
+**Automated and passing** — run by `npm run check`, which now builds before it tests so the packaged suite verifies this commit's artifact rather than the previous one:
+
+| Deliverable | Where it runs | What it proves |
+| --- | --- | --- |
+| 1. Focused suites and the final gate | `npm run check` | Lint, strict typecheck, build, and every Vitest suite. |
+| 2. Package allowlist inspection | `test/package.test.ts` | `npm pack --dry-run --json` ships exactly the allowed top-level entries, every file a deployment needs — the bundled example, the four installer helpers, the gateway client, the pinned GitHub host keys, the standalone bundle — with exactly six executable entries at `0755` and everything else at `0644`, and no source, test, tarball, source map, `.env`, or `deploykit.config.yaml`. |
+| 3. Real tarball installed into an isolated prefix | `test/package.test.ts` | The packed tarball is installed with `npm install --global --prefix`, and the *installed* binary reports the version, prints help carrying `--config`/`--dry-run`/`--no-wait`, scaffolds a mode-`0600` Git-excluded config, refuses the untouched example, parses `--dry-run`, emits one stable usage envelope, reports the standalone bundle's version, and packs a runtime bundle naming the published package. |
+| 9. Canary scan of the published artifact | `test/package.test.ts` | Every file in the extracted tarball is scanned for each synthetic canary and its base64 form. The repository diff, generated artifacts, mocked argv, gateway output, server state, and CLI stdout/stderr are covered by `test/orchestrator-contracts.test.ts`, `test/orchestrator-integration.test.ts`, and `test/cli-deploy.test.ts`. |
+| 10. Version alignment | `test/package.test.ts` | `package.json`, `npm-shrinkwrap.json` (both the root and the `""` entry), `src/version.ts`, the packed filename, and the standalone `dist/server-cli.cjs` all agree, the installer pins the same Node and PM2 versions as the source, and the frozen protocol fixture still carries the version the compiler stamps. |
+
+Deliverable 3 is not ceremony. It is what caught a packaged CLI that failed on its very first command: two modules located the package root by assuming a fixed depth that is correct in `src/<area>/` and wrong in the bundled `dist/`, so every source-tree test passed while the published artifact could not scaffold a config. `src/package-root.ts` now finds the root by walking up to the markers that only the root has, and all three call sites share it.
+
+**Outstanding — requires disposable infrastructure:** deliverables 4 through 8, the matrix below. They need Ubuntu 22.04/24.04 hosts on amd64 and arm64, staging DNS records, Let's Encrypt staging, and private test repositories. They cannot run on a workstation or in ordinary CI, and Phase 14's gate is not met until they pass.
+
+## Phase 14 disposable-VPS matrix
 
 Run this matrix only with disposable hosts, private test repositories, staging DNS, and Let's Encrypt staging. Never enroll a test repository on a production VPS, reuse production credentials, or put a secret value in the evidence bundle.
 
@@ -60,7 +78,7 @@ For every matrix run, record the case IDs, UTC time, DeployKit package and bundl
 
 Evidence must also include a canary-negative scan of generated files, Git diff, package contents, mock/API requests, process arguments, workflow output, gateway output, server state/events/logs, Nginx/PM2/systemd files, and release archives. Never archive `deploykit.config.yaml`, private keys, GitHub tokens, secret frames, `secrets.env`, or raw provider responses.
 
-The one-file orchestrator may be described as production-ready only when every automated Phase 1–13 gate and this disposable-infrastructure matrix pass.
+Every automated Phase 1–13 gate has passed, along with Phase 14's package, install, leak, and version-alignment gates. The one-file orchestrator may be described as production-ready only once this disposable-infrastructure matrix passes as well.
 
 ## Current v0.1 legacy acceptance baseline
 

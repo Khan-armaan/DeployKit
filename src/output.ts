@@ -96,9 +96,15 @@ export class Reporter {
     this.event("error", code, message, { data });
   }
 
-  result(code: string, data: unknown): void {
+  /**
+   * `ok` describes the reported outcome, not whether the report was produced.
+   * A deployment that failed still returns a useful result — the partial
+   * identity, the run URL, the recovery action — and a consumer that keys off
+   * `ok` must not read that as a success.
+   */
+  result(code: string, data: unknown, options: { ok?: boolean } = {}): void {
     if (this.mode === "json") {
-      this.stdout.write(`${JSON.stringify({ ok: true, code, data: redact(data) })}\n`);
+      this.stdout.write(`${JSON.stringify({ ok: options.ok ?? true, code, data: redact(data) })}\n`);
     } else if (typeof data === "string") {
       this.stdout.write(`${data.endsWith("\n") ? data : `${data}\n`}`);
     } else {

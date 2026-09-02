@@ -2,9 +2,9 @@ import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, readFile, rm } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { DeployKitError } from "../errors.js";
+import { resolvePackageRoot } from "../package-root.js";
 import { run } from "../process.js";
 import type { ConfigConfirmationResult, SecureConfigReadResult } from "./dependencies.js";
 import { orchestratorError } from "./failures.js";
@@ -48,15 +48,17 @@ function insecure(message: string, cause?: unknown): DeployKitError {
 
 // ------------------------------------------------------------- packaging --
 
+/**
+ * Found rather than assumed: this module is loaded from `src/orchestrator/`
+ * under test and from `dist/` or `dist/chunks/` once the CLI is bundled, and a
+ * fixed depth is right for only one of those. See {@link resolvePackageRoot}.
+ */
 function modulePackageRoot(): string {
-  const moduleUrl: string | undefined = import.meta.url;
-  if (!moduleUrl) {
-    throw new DeployKitError(
-      "DK_UNSUPPORTED",
-      "The deployment configuration template is unavailable in the standalone VPS runtime",
-    );
-  }
-  return resolve(dirname(fileURLToPath(moduleUrl)), "..", "..");
+  return resolvePackageRoot({
+    moduleUrl: import.meta.url,
+    markers: [DEPLOY_CONFIG_EXAMPLE_ASSET],
+    subject: "deployment configuration template",
+  });
 }
 
 export function resolveBundledConfigExamplePath(packageRoot = modulePackageRoot()): string {

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, join } from "node:path";
 
+import { resolvePackageRoot } from "../package-root.js";
 import { SHA256_HEX_PATTERN, type Sha256Hex } from "./contracts.js";
 import { orchestratorError } from "./failures.js";
 import type { RuntimeBundleReference } from "./planner.js";
@@ -53,13 +53,19 @@ function bootstrapFailure(message: string, details: Record<string, unknown> = {}
   return orchestratorError("DK_GATEWAY_BOOTSTRAP_FAILED", message, { details });
 }
 
-/** The root of the installed npm package, resolved from this module's location. */
+/**
+ * The root of the installed npm package, *found* rather than assumed. This
+ * module is loaded from `src/orchestrator/` under test and from `dist/` or
+ * `dist/chunks/` once the CLI is bundled, so a fixed depth is right for only
+ * one of them — see {@link resolvePackageRoot}. Both markers are required
+ * because every caller here needs the manifest *and* the installer assets.
+ */
 export function localPackageRoot(): string {
-  const moduleUrl: string | undefined = import.meta.url;
-  if (!moduleUrl) {
-    throw bootstrapFailure("the runtime bundle can only be packed from the local npm CLI");
-  }
-  return resolve(dirname(fileURLToPath(moduleUrl)), "..", "..");
+  return resolvePackageRoot({
+    moduleUrl: import.meta.url,
+    markers: ["package.json", "assets/bootstrap.sh"],
+    subject: "DeployKit package",
+  });
 }
 
 export async function readPackageIdentity(

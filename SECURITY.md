@@ -2,13 +2,17 @@
 
 ## Implementation status
 
-The restricted-gateway model documented below is now installed rather than only designed. `assets/bootstrap.sh` no longer enrolls a GitHub Actions runner: a freshly bootstrapped host receives the non-login `deploykit-gateway` account, a root-owned binding, one forced-command entry, one no-argument sudo entry, the checksum-verified standalone runtime, the pinned GitHub host keys, and a stable read-only repository key. No Actions Runner package, registration token, job hook, or service is placed on a fresh host.
+The restricted-gateway model documented below is now installed and reachable. `assets/bootstrap.sh` no longer enrolls a GitHub Actions runner: a freshly bootstrapped host receives the non-login `deploykit-gateway` account, a root-owned binding, one forced-command entry, one no-argument sudo entry, the checksum-verified standalone runtime, the pinned GitHub host keys, and a stable read-only repository key. No Actions Runner package, registration token, job hook, or service is placed on a fresh host.
 
-The typed GitHub client and its ownership rules are now implemented as well, but no command constructs them: nothing in the shipped CLI performs a GitHub mutation. The remaining phases are the reviewed control artifacts, cross-plane key and Environment reconciliation, dispatch, and the CLI cutover, plus the disposable-VPS acceptance matrix. Until those pass, `deploykit deploy` still stops before dispatch and the model must not be described as production-ready.
+Every GitHub-side property below is implemented as well, and `deploykit deploy` now performs the whole flow: reviewed control artifacts, cross-plane key and Environment reconciliation, dispatch, run correlation, and the inspected result. The one remaining gate is the disposable-VPS acceptance matrix in [`docs/acceptance.md`](docs/acceptance.md). Until it passes, the model must not be described as production-ready.
 
 ## Hosts bootstrapped by DeployKit v0.1.x
 
-A host enrolled by an earlier release still carries a repository-scoped GitHub Actions runner running as root. That is not a sandbox: a workflow accepted by the runner, a Docker build, or a host package script can obtain full control of the VPS. Re-running the current bootstrap does not remove it — the approval-gated migration that stops and unregisters a legacy runner is owned by a later phase.
+A host enrolled by an earlier release still carries a repository-scoped GitHub Actions runner running as root. That is not a sandbox: a workflow accepted by the runner, a Docker build, or a host package script can obtain full control of the VPS.
+
+`deploykit deploy` migrates such a host, and the order is the security property. The replacement gateway is installed and proven by a real forced-command handshake *before* the operator is asked anything; the operator is then asked explicitly, in that same invocation, and a non-interactive session counts as a refusal. Only after approval is the runner's systemd service stopped and disabled, and only then is its registration deleted and GitHub's own runner listing re-read to prove no job can still be routed there. A refusal removes nothing and dispatches nothing: DeployKit will not deploy beside a repository-controlled root runner, and it will not remove one without being told to.
+
+Nothing under `/opt/actions-runner` is deleted, moved, or rewritten, so a migrated host stays recoverable. A runner registered against a different repository on the same host is never touched, and a runner whose GitHub registration DeployKit cannot identify is refused as an ownership conflict *before* its service is stopped — unregistering the wrong runner, or stopping one that stays registered, are both worse than stopping.
 
 Until such a host is migrated:
 
@@ -19,11 +23,11 @@ Until such a host is migrated:
 5. Enroll one separately labeled runner per trusted repository.
 6. Rotate application credentials after suspected repository, runner, or Docker compromise.
 
-Application code from the selected ref is intentionally built on the VPS in both models. Trusted Dockerfiles and package scripts can therefore control the host even after the persistent root runner is gone; the gateway narrows who may *start* a deployment, not what a deployment is allowed to build.
+Migration removes the persistent root runner; it does not change what a deployment may build. Application code from the selected ref is intentionally built on the VPS in both models. Trusted Dockerfiles and package scripts can therefore control the host even after the persistent root runner is gone; the gateway narrows who may *start* a deployment, not what a deployment is allowed to build.
 
 ## Restricted-gateway security contract
 
-The one-file orchestrator replaces the persistent root runner with a GitHub-hosted runner and a forced-command SSH gateway. The trust-zone, key, forced-command, and bootstrap properties below are enforced by the shipped gateway, installer, and bootstrap boundary; the GitHub-side properties remain the contract that later phases must satisfy.
+The one-file orchestrator replaces the persistent root runner with a GitHub-hosted runner and a forced-command SSH gateway. Every property below is enforced by shipped code — the gateway, the installer, the bootstrap boundary, the typed GitHub client, and the reconcilers `deploykit deploy` drives.
 
 ### Administrator SSH and bootstrap
 
@@ -50,6 +54,7 @@ The one-file orchestrator replaces the persistent root runner with a GitHub-host
 - Safe reads retry with bounded backoff; mutations are attempted exactly once, because a failed write may still have landed and a repeat would create a second branch, pull request, or deploy key.
 - Responses are size-bounded before parsing, fields are read through checked accessors, listings stop at a frozen page ceiling by failing closed rather than truncating, and neither a response body nor the CLI's stderr is attached to any reported failure.
 - Repository deploy keys are created read-only, and a key that comes back with write access is refused rather than used.
+- Self-hosted runner registrations are read and deleted, never created. DeployKit enrolls no runner on any host, and the only registration it ever deletes is the one a legacy host's own `.runner` file identifies for the repository being deployed.
 
 ### Configuration and control artifacts
 
@@ -80,7 +85,7 @@ The one-file orchestrator replaces the persistent root runner with a GitHub-host
 - Do not commit `.env` files or `deploykit.config.yaml`. DeployKit stores runtime values under `/etc/deploykit` with mode `0600`.
 - Static frontend variables are public and embedded in built assets.
 - Current v0.1 secret values are never accepted in `deploykit.yaml`, command arguments, generated Nginx files, or deployment state.
-- In the planned orchestrator, backend values travel as individual protected GitHub Environment secrets and bounded gateway secret frames. They must not appear in workflow YAML, workflow inputs, process arguments, job outputs, `$GITHUB_ENV`, generated artifacts, logs, errors, state, operation records, Nginx, PM2 configuration, systemd units, or release archives.
+- Backend values travel as individual protected GitHub Environment secrets and bounded gateway secret frames. They must not appear in workflow YAML, workflow inputs, process arguments, job outputs, `$GITHUB_ENV`, generated artifacts, logs, errors, state, operation records, Nginx, PM2 configuration, systemd units, or release archives.
 - `deploykit advise` excludes common secret files and redacts detected values before a provider request.
 
 ## Reporting

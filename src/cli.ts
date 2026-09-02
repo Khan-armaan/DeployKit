@@ -8,7 +8,12 @@ import prompts from "prompts";
 import { OpenAIAdvisorProvider, AnthropicAdvisorProvider, loadApprovedAdvisorFiles, requestManifestAdvice } from "./advisor/index.js";
 import { bootstrapServer, readSshFingerprint } from "./bootstrap.js";
 import { renderCliError } from "./cli-errors.js";
-import { compileRuntimeManifest, loadOperatorConfig } from "./orchestrator/config.js";
+import type { LegacyRunnerApprovalRequest } from "./orchestrator/deploy.js";
+import type { OrchestratorResult } from "./orchestrator/dependencies.js";
+import {
+  runProductionDeployment,
+  type ProductionDeploymentOptions,
+} from "./orchestrator/production.js";
 import { DeployKitError } from "./errors.js";
 import { atomicWriteFile, writeIfAbsent } from "./fs.js";
 import { dispatchDeployment, inferGitHubRepository, validateApplicationRef } from "./github.js";
@@ -116,29 +121,63 @@ async function confirm(message: string, initial = false): Promise<boolean> {
   return Boolean(response.yes);
 }
 
+export interface ConfigDeployFlags {
+  readonly config?: string;
+  readonly dryRun?: boolean;
+  /** Commander's `--no-wait`: true unless the operator passed the flag. */
+  readonly wait?: boolean;
+}
+
 /**
- * Scaffolds, securely reads, and validates the one-file deployment config.
- * Interactive sessions wait at the prompt so the same command can continue once
- * the operator has filled the file in.
+ * The whole translation from public flags to orchestrator options. Absent flags
+ * stay absent rather than becoming explicit `false`, so the orchestrator's own
+ * defaults remain the single definition of the default path.
  */
-async function loadOperatorDeployment(out: Reporter): Promise<Awaited<ReturnType<typeof loadOperatorConfig>>> {
-  return loadOperatorConfig({
-    confirm: (message) => confirm(message, true),
-    onScaffold: (location) => {
-      out.info(
-        "DK_CONFIG_SCAFFOLDED",
-        `Created ${location.configPath} with mode 0600 and excluded it through ${location.excludePath}`,
-      );
-    },
+export function configDeploymentOptions(flags: ConfigDeployFlags): {
+  readonly configPath?: string;
+  readonly dryRun?: boolean;
+  readonly noWait?: boolean;
+} {
+  return {
+    ...(flags.config === undefined ? {} : { configPath: resolve(flags.config) }),
+    ...(flags.dryRun === true ? { dryRun: true } : {}),
+    ...(flags.wait === false ? { noWait: true } : {}),
+  };
+}
+
+/**
+ * The one-command deployment.
+ *
+ * Everything the CLI contributes is on this side of the call: the operator's
+ * flags, a reporter that already knows how to redact, and the two questions a
+ * terminal can answer — "have you filled the config in?" and "may the legacy
+ * root runner be retired?". A non-interactive session answers no to both, so a
+ * script can never approve a destructive migration by omission.
+ */
+export async function runConfigDeployment(
+  options: { readonly reporter: Reporter } & ProductionDeploymentOptions,
+): Promise<OrchestratorResult> {
+  const interactive = options.interactive ?? Boolean(process.stdin.isTTY);
+  return runProductionDeployment({
+    interactive,
+    confirm: (message: string) => confirm(message, true),
+    approveLegacyRunnerRemoval: (request: LegacyRunnerApprovalRequest) =>
+      confirm(
+        `${request.host} still runs the v0.1 GitHub Actions runner as root for ${request.repository}` +
+          ` at ${request.runnerRoot}. The replacement gateway is installed and verified.` +
+          " Stop and unregister the old runner now? Its files are kept for recovery.",
+        false,
+      ),
+    ...options,
   });
 }
 
 export function configureProgram(): Command {
   const program = new Command()
     .name("deploykit")
-    .description("Manifest-driven first deployments to Ubuntu VPS hosts")
+    .description("One-file, one-command first deployments to Ubuntu VPS hosts")
     .version(VERSION)
-    .option("--manifest <path>", "manifest path", "deploykit.yaml")
+    .option("--manifest <path>", "legacy deploykit.yaml manifest path", "deploykit.yaml")
     .option("--json", "emit machine-readable JSON")
     .option("--verbose", "show diagnostic details");
   // Set these before creating subcommands so they inherit non-exiting behavior.
@@ -404,49 +443,53 @@ export function configureProgram(): Command {
   };
 
   program.command("deploy")
-    .description("deploy from deploykit.config.yaml")
+    .description("deploy the repository from deploykit.config.yaml")
+    .option("--config <path>", "deploykit.config.yaml at an application repository root")
+    .option("--dry-run", "inspect every boundary and mutate nothing")
+    .option("--no-wait", "stop once the workflow run is correlated")
     .option("--target <name>", "legacy deploykit.yaml target")
     .option("--ref <branch>", "legacy application branch")
     .option("--repo <owner/name>", "legacy GitHub repository")
-    .option("--dry-run", "legacy workflow dry run")
-    .action(async (options: { target?: string; ref?: string; repo?: string; dryRun?: boolean }, command: Command) => {
+    .action(async (options: {
+      config?: string;
+      dryRun?: boolean;
+      wait: boolean;
+      target?: string;
+      ref?: string;
+      repo?: string;
+    }, command: Command) => {
+      // The documented v0.1 path stays reachable, and stays opt-in: only the
+      // legacy flags select it. Everything else is the config-driven product.
       const legacyRequested = options.target !== undefined || options.ref !== undefined ||
-        options.repo !== undefined || options.dryRun === true;
-      if (!legacyRequested) {
-        const out = reporter(command);
-        const loaded = await loadOperatorDeployment(out);
-        // Phase 3 compiles the secret-free runtime manifest and its digest.
-        // Phases 4-13 own GitHub setup, the gateway, and dispatch, so nothing
-        // beyond the local config file is read or mutated here.
-        const compiled = compileRuntimeManifest(loaded);
-        out.info("DK_CONFIG_OK", `Validated ${loaded.location.configPath} for target '${loaded.config.target.name}'`, {
-          project: loaded.config.project.name,
-          repository: loaded.config.project.repository,
-          ref: loaded.config.project.ref,
-          target: loaded.config.target.name,
-          targetId: compiled.targetId,
-          primaryDomain: loaded.config.target.primaryDomain,
-          services: Object.keys(loaded.config.services).sort(),
-          declaredSecretNames: loaded.environment.declaredSecretNames,
-          manifestDigest: compiled.digest,
-          manifestBytes: compiled.canonicalBytes.byteLength,
-        });
-        throw new DeployKitError(
-          "DK_UNSUPPORTED",
-          "This build validates and compiles deploykit.config.yaml, but the one-command deployment orchestrator is not implemented yet. The legacy --target/--ref path remains available only for already initialized v0.1 projects.",
+        options.repo !== undefined;
+      if (legacyRequested) {
+        if (options.config !== undefined) {
+          throw new DeployKitError(
+            "DK_USAGE",
+            "--config belongs to the deploykit.config.yaml deployment and cannot be combined with the legacy --target/--ref flags",
+          );
+        }
+        if (options.target === undefined || options.ref === undefined) {
+          throw new DeployKitError(
+            "DK_USAGE",
+            "Legacy deployment requires both --target <name> and --ref <branch>",
+          );
+        }
+        await dispatchLegacy(
+          { ...options, target: options.target, ref: options.ref },
+          command,
+          false,
         );
+        return;
       }
-      if (options.target === undefined || options.ref === undefined) {
-        throw new DeployKitError(
-          "DK_USAGE",
-          "Legacy deployment requires both --target <name> and --ref <branch>",
-        );
-      }
-      await dispatchLegacy({ ...options, target: options.target, ref: options.ref }, command, false);
+      await runConfigDeployment({
+        reporter: reporter(command),
+        ...configDeploymentOptions(options),
+      });
     });
 
   program.command("retry")
-    .description("resume a failed legacy first deployment")
+    .description("legacy deploykit.yaml only: resume a failed first deployment (a deploykit.config.yaml deployment resumes by rerunning deploykit deploy)")
     .requiredOption("--target <name>")
     .requiredOption("--ref <branch>")
     .option("--repo <owner/name>")
@@ -462,10 +505,10 @@ export function configureProgram(): Command {
     const result = await runRemoteDeployKit(enrolled.host, ["server", kind === "status" ? "target-status" : "target-logs", "--target-id", targetId, ...(kind === "logs" ? ["--tail", String(tail ?? 200)] : [])], { hostKey: enrolled.hostKey });
     return JSON.parse(result.stdout) as unknown;
   };
-  program.command("status").description("inspect deployment state on the target server").requiredOption("--target <name>").action(async (options: { target: string }, command: Command) => {
+  program.command("status").description("legacy deploykit.yaml only: inspect deployment state on the target server (deploykit deploy reports it)").requiredOption("--target <name>").action(async (options: { target: string }, command: Command) => {
     reporter(command).result("DK_STATUS", await inspectRemote("status", options.target, await manifestFor(command)));
   });
-  program.command("logs").description("read redacted deployment logs from the target server").requiredOption("--target <name>").option("--tail <lines>", "line count", integerOption("tail", 1, 10_000), 200).action(async (options: { target: string; tail: number }, command: Command) => {
+  program.command("logs").description("legacy deploykit.yaml only: read redacted deployment logs from the target server").requiredOption("--target <name>").option("--tail <lines>", "line count", integerOption("tail", 1, 10_000), 200).action(async (options: { target: string; tail: number }, command: Command) => {
     reporter(command).result("DK_LOGS", await inspectRemote("logs", options.target, await manifestFor(command), options.tail));
   });
 

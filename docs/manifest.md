@@ -1,5 +1,9 @@
 # DeployKit manifest reference
 
+This file documents `deploykit.yaml`, the **legacy** hand-edited manifest. It is not the file a one-command deployment asks for.
+
+`deploykit deploy` reads `deploykit.config.yaml` and compiles it into a secret-free runtime manifest whose shape and canonicalization are frozen in [`orchestrator-contracts.md`](orchestrator-contracts.md); the bundled `assets/deploykit.config.example.yaml` is the authoritative example of the file an operator actually writes. The semantics below still describe what the compiled result must satisfy, because the compiler validates through exactly these rules — so this remains the reference for what a service, frontend, route, database, or hook may say. Read it that way, and read it directly only when maintaining a project already initialized on the legacy path.
+
 `deploykit.yaml` is parsed strictly. Unknown fields are errors so configuration mistakes cannot silently change production behavior.
 
 ## Top-level fields

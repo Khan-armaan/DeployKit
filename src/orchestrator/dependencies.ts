@@ -149,6 +149,15 @@ export interface WorkflowRunState extends WorkflowRunIdentity {
     | null;
 }
 
+/** A repository-scoped self-hosted runner GitHub could still route a job to. */
+export interface SelfHostedRunnerRegistration {
+  readonly id: number;
+  readonly name: string;
+  readonly status: string;
+  readonly busy: boolean;
+  readonly labels: readonly string[];
+}
+
 export interface GitHubPort {
   inspectRepository(repository: string): Promise<GitHubRepositoryFacts>;
   resolveCommit(repository: string, ref: string): Promise<GitHubResolvedCommit>;
@@ -161,6 +170,15 @@ export interface GitHubPort {
   dispatchWorkflow(request: WorkflowDispatchRequest): Promise<WorkflowDispatchReceipt>;
   findWorkflowRun(request: WorkflowDispatchRequest): Promise<WorkflowRunState | undefined>;
   inspectWorkflowRun(identity: WorkflowRunIdentity): Promise<WorkflowRunState>;
+
+  /**
+   * Phase 13's legacy-runner migration. Both are optional so an adapter that
+   * predates the migration stays valid; when either is absent the state machine
+   * refuses to retire a runner rather than removing one it cannot then prove
+   * GitHub has stopped routing to.
+   */
+  listSelfHostedRunners?(repository: string): Promise<readonly SelfHostedRunnerRegistration[]>;
+  deleteSelfHostedRunner?(repository: string, runnerId: number): Promise<void>;
 }
 
 export interface AdministratorSshConnection {
@@ -204,6 +222,34 @@ export interface RepositoryAccessProofFacts {
   readonly reachable: true;
 }
 
+/**
+ * A repository-scoped GitHub Actions runner a DeployKit v0.1.x bootstrap
+ * installed on this host as root.
+ *
+ * `agentId` is the registration id GitHub itself issued, read out of the
+ * runner's own `.runner` file, so the host and GitHub are matched by the key
+ * both sides already agree on rather than by a reconstructed name.
+ */
+export interface LegacyRunnerFacts {
+  readonly present: boolean;
+  readonly root: string | null;
+  readonly agentId: number | null;
+  readonly agentName: string | null;
+  /** The repository URL the runner is registered against, as it recorded it. */
+  readonly gitHubUrl: string | null;
+  readonly serviceUnit: string | null;
+  readonly serviceActive: boolean;
+}
+
+export interface LegacyRunnerRetirement {
+  readonly stopped: boolean;
+  readonly disabled: boolean;
+  readonly serviceActive: boolean;
+  /** Always true: the runner's directory is kept so the host stays recoverable. */
+  readonly filesRetained: true;
+  readonly root: string;
+}
+
 export interface AdministratorSshPort {
   preflight(connection: AdministratorSshConnection): Promise<AdministratorSshPreflight>;
   inspectGateway(
@@ -220,6 +266,25 @@ export interface AdministratorSshPort {
     connection: AdministratorSshConnection,
     binding: RootOwnedGatewayBinding,
   ): Promise<RepositoryAccessProofFacts>;
+
+  /**
+   * Phase 13's legacy-runner migration. Read-only; it installs nothing and
+   * removes nothing. Optional for the same reason as above.
+   */
+  inspectLegacyRunner?(
+    connection: AdministratorSshConnection,
+    repository: string,
+  ): Promise<LegacyRunnerFacts>;
+
+  /**
+   * Stops and disables the legacy runner's service. Its directory, work tree,
+   * registration file, and logs are deliberately left in place so an operator
+   * can restore the old path if the migration has to be undone.
+   */
+  retireLegacyRunner?(
+    connection: AdministratorSshConnection,
+    facts: LegacyRunnerFacts,
+  ): Promise<LegacyRunnerRetirement>;
 }
 
 export interface GatewayConnection {
@@ -294,6 +359,7 @@ export type OrchestratorProgressPhase =
   | "commit"
   | "control-artifacts"
   | "gateway"
+  | "legacy-runner"
   | "repository-key"
   | "environment"
   | "readiness"

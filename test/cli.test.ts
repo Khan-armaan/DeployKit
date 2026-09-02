@@ -111,7 +111,7 @@ describe("public CLI contract", () => {
     }
   });
 
-  it("lets bare deploy scaffold, validate, and refuse the one-file configuration", async () => {
+  it("lets bare deploy scaffold and validate the one-file configuration before any remote work", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "deploykit-cli-config-")));
     await execFileAsync("git", ["init", "--quiet", root]);
     const configPath = join(root, "deploykit.config.yaml");
@@ -139,13 +139,17 @@ describe("public CLI contract", () => {
         exitCode: 3,
       });
 
-      // 3. Filled config: validate it, then stop at the Phase 2 boundary.
+      // 3. Filled config: compile it, then refuse the empty application tree.
+      // The refusal proves the cutover happened *and* that local validation
+      // still runs before GitHub is authenticated or the VPS is contacted —
+      // this repository has no `gh` session and no VPS, and neither is needed
+      // to produce this failure.
       const filled = await readFile(fixturePath, "utf8");
       await writeFile(configPath, filled, { mode: 0o600 });
       await chmod(configPath, 0o600);
       await expect(main(["node", "deploykit", "deploy"])).rejects.toMatchObject({
-        code: "DK_UNSUPPORTED",
-        message: expect.stringContaining("orchestrator is not implemented yet"),
+        code: "DK_VALIDATION_FAILED",
+        exitCode: 3,
       });
       expect(writes.join("")).toContain("DK_CONFIG_OK");
     } finally {

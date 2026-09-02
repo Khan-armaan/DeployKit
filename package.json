@@ -39,7 +39,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "check": "npm run lint && npm run typecheck && npm run build && npm test",
     "release:pack": "npm run check && node scripts/package-release.mjs",
     "prepublishOnly": "npm run check"
   },

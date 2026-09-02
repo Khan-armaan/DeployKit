@@ -36,7 +36,12 @@ export function createOrchestratorOutput(reporter: Reporter): OutputPort {
       });
     },
     result(result: OrchestratorResult): void {
-      reporter.result(ORCHESTRATOR_RESULT_CODE, result);
+      // `config-created` and `waiting-for-review` are reported through a thrown
+      // failure too, so neither is an `ok` result: each one means the operator
+      // still has something to do before a deployment can happen.
+      reporter.result(ORCHESTRATOR_RESULT_CODE, result, {
+        ok: result.outcome === "succeeded" || result.outcome === "dispatched" || result.outcome === "dry-run",
+      });
     },
   };
 }
