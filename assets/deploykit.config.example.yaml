@@ -35,10 +35,15 @@ target:
     - www.app.example.com
 
 server:
+  # The real address and port. Connections run with `-F /dev/null`, so a Host
+  # alias from ~/.ssh/config is not resolved here.
   host: vps.example.com
+  # Must be able to run `sudo -n true`: root, or passwordless sudo.
   user: ubuntu
   port: 22
   # Administrator key used only from this machine. It is never uploaded.
+  # It must have no passphrase: connections run with BatchMode=yes and
+  # IdentityAgent=none, so DeployKit can neither prompt nor reach your agent.
   identityFile: /home/you/.ssh/id_ed25519
   # Verify out of band: ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -
   hostKeyFingerprint: SHA256:replace-with-verified-ed25519-fingerprint

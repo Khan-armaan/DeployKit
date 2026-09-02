@@ -27,6 +27,7 @@ import type {
   GitHubRunRequest,
   GitHubRunResult,
 } from "../../src/orchestrator/github.js";
+import { VERSION } from "../../src/version.js";
 
 /**
  * A hermetic "outside world" for the Phase 12 integration suite: one in-memory
@@ -770,7 +771,8 @@ export class HermeticHost implements AdministratorCommandRunner {
       targetName: flag("--target-name"),
       targetId: flag("--target-id"),
       bindingId: flag("--binding-id"),
-      runtimeVersion: "0.1.3",
+      // The installer just placed this release on the host.
+      runtimeVersion: VERSION,
       runtimeBundleSha256: flag("--sha256"),
     };
     // Exit 4 is the installer's frozen "already bound to something else" status.
@@ -1045,11 +1047,11 @@ export async function createRuntimeBundle(directory: string): Promise<{
   readonly packageSha256: string;
 }> {
   await mkdir(directory, { recursive: true });
-  const packageFile = join(directory, "deploykit-0.1.3.tgz");
+  const packageFile = join(directory, `deploykit-${VERSION}.tgz`);
   const contents = `deploykit runtime bundle ${randomUUID()}`;
   await writeFile(packageFile, contents);
   return {
-    version: "0.1.3",
+    version: VERSION,
     packageName: "@deploykit001/deploykit",
     packageFile,
     packageSha256: createHash("sha256").update(contents).digest("hex"),

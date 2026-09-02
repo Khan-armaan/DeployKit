@@ -1,6 +1,6 @@
 import { satisfies, validRange } from "semver";
 
-export const VERSION = "0.1.3";
+export const VERSION = "0.1.4";
 export const PM2_VERSION = "6.0.8";
 export const BOOTSTRAP_NODE_VERSION = "22.18.0";
 

@@ -20,7 +20,43 @@ Phase 14 splits cleanly into what a workstation can prove and what only a real h
 
 Deliverable 3 is not ceremony. It is what caught a packaged CLI that failed on its very first command: two modules located the package root by assuming a fixed depth that is correct in `src/<area>/` and wrong in the bundled `dist/`, so every source-tree test passed while the published artifact could not scaffold a config. `src/package-root.ts` now finds the root by walking up to the markers that only the root has, and all three call sites share it.
 
+`npm run check` also passes on Node 20.11.0 — the exact floor `engines` declares — as well as on the 22.18.0 the VPS installer pins and on current 24.x. CI runs all three, so the compatibility claim in `package.json` is a tested claim rather than an assertion.
+
 **Outstanding — requires disposable infrastructure:** deliverables 4 through 8, the matrix below. They need Ubuntu 22.04/24.04 hosts on amd64 and arm64, staging DNS records, Let's Encrypt staging, and private test repositories. They cannot run on a workstation or in ordinary CI, and Phase 14's gate is not met until they pass.
+
+### What already runs without a host, and what does not
+
+Being unable to run the matrix is not the same as being unable to test what the matrix checks. Every row's *decision logic* — the refusals, the orderings, the idempotence, the interruption points, the redaction — is exercised by the automated suites against real Git repositories, real SSH key material, a real packed tarball, and the real built `dist/` bundle. What no workstation can supply is the environment itself: a booted Ubuntu kernel, a live resolver, a certificate authority, GitHub's own API enforcement, and a second machine's clock.
+
+The table below states, per row, which suite proves the logic and exactly what is left for a host to prove. Read it as a scoping tool for the hardware run, not as a substitute for it: a row with a residue is not closed until that residue is exercised on real infrastructure.
+
+| ID | Proven automatically by | Left for real infrastructure |
+| --- | --- | --- |
+| PKG-01 | `test/package.test.ts` | Nothing; this row is closed. |
+| CFG-01 | `test/orchestrator-config.test.ts`, `test/orchestrator-config-isolation.test.ts`, `test/cli-deploy.test.ts` | Nothing; this row is closed. |
+| CFG-02 | `test/orchestrator-config.test.ts` plus every fixture under `test/fixtures/orchestrator/config/invalid/` through `test/orchestrator-contracts.test.ts` | Nothing; this row is closed. |
+| E2E-01 | `test/orchestrator-integration.test.ts`, `test/dist-bundle.test.ts` | A booted host, a live DNS answer, a real certificate, and a real HTTPS and health response. |
+| PR-01 | `test/orchestrator-control-artifacts.test.ts`, `test/orchestrator-deploy.test.ts` | GitHub enforcing branch protection and required review itself. |
+| GATE-01 | `test/bootstrap.test.ts`, `test/orchestrator-bootstrap.test.ts` | Running `assets/bootstrap.sh` on each Ubuntu release and architecture. |
+| KEY-01 | `test/orchestrator-cross-plane.test.ts`, `test/bootstrap.test.ts` | GitHub's deploy-key API and a real `authorized_keys` read by a real sshd. |
+| ENV-01 | `test/orchestrator-cross-plane.test.ts` | GitHub's Environment API, including reviewers, wait timers, and branch policy. |
+| RUN-01 | `test/orchestrator-deploy.test.ts`, `test/orchestrator-integration.test.ts` | A real `workflow_dispatch` and the Actions run it produces. |
+| SRC-01, SRC-02 | `test/gateway-source.test.ts`, against real Git repositories | Fetching over SSH from `github.com` with the pinned host keys. |
+| RES-01 | `test/orchestrator-deploy.test.ts` (interruption after every checkpoint), `test/server-identity.test.ts` | Interrupting a run that is really mid-flight on a host. |
+| ID-01 | `test/server-identity.test.ts`, `test/server-apply.test.ts` | Nothing beyond a state directory on a real filesystem. |
+| LEG-01 | `test/server-identity.test.ts` | A host carrying genuine v0.1 state. |
+| REG-01 | `test/server-registry.test.ts`, `test/server-identity.test.ts` | Two real projects on one host and real loopback listeners. |
+| DNS-01 | `test/server-primitives.test.ts`, `test/plan.test.ts` | A real resolver answering real records, including a CNAME. |
+| OWN-01 | `test/production-driver.test.ts`, `test/server-registry.test.ts`, `test/orchestrator-github.test.ts` | A genuinely occupied port and an unmanaged Nginx site. |
+| APP-01 | `test/server-apply.test.ts`, `test/production-driver.test.ts` | Real migrations, containers, PM2 processes, and Certbot. |
+| PROTO-01 | `test/gateway-protocol.test.ts`, `test/orchestrator-contracts.test.ts` | Nothing; this row is closed. |
+| BIND-01 | `test/gateway-protocol.test.ts`, `test/bootstrap.test.ts` | A root-owned binding file on a real host. |
+| SSH-01 | `test/orchestrator-bootstrap.test.ts`, `test/gateway-protocol.test.ts` | A real sshd forced command refusing a real PTY and real forwarding. |
+| DONE-01 | `test/server-apply.test.ts`, `test/orchestrator-deploy.test.ts` | Nothing; this row is closed. |
+| LEAK-01 | `test/orchestrator-contracts.test.ts`, `test/package.test.ts`, `test/orchestrator-integration.test.ts`, `test/dist-bundle.test.ts`, `test/cli-deploy.test.ts` | Real Actions logs, gateway output, and on-host state. |
+| MIG-01 | `test/cli-deploy.test.ts` | A host carrying a real v0.1 root Actions runner. |
+
+Six rows — PKG-01, CFG-01, CFG-02, PROTO-01, DONE-01, and ID-01 — need no infrastructure at all and are complete. The remaining seventeen are scoped to their residue rather than to the whole scenario.
 
 ## Phase 14 disposable-VPS matrix
 
@@ -120,7 +156,7 @@ Run each on a fresh target:
 - Existing unmanaged `server_name`: no managed site overwrite.
 - Deliberately invalid generated Nginx: `nginx -t` fails and the active configuration remains unchanged.
 - Migration failure: seed, health, proxy, and TLS phases do not run.
-- Health failure after proxy staging: the newly enabled managed site is disabled; source, state, logs, secrets, reservations, containers, PM2 data, and database volumes remain.
+- Failure at a phase that runs after the proxy is live — `tls-issued` or `activated`, since `health-verified` precedes `proxy-staged` — the newly enabled managed site is disabled and nothing else is: source, state, logs, secrets, reservations, containers, PM2 data, and database volumes remain.
 - Retry the same commit: completed checkpoints are skipped and the deployment can finish.
 - Retry a different commit: the server rejects it.
 

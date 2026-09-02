@@ -5,7 +5,10 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 
 const output = await new Promise((resolve, reject) => {
-  const child = spawn("npm", ["pack", "--json"], { stdio: ["ignore", "pipe", "inherit"] });
+  // `--dry-run=false` is explicit: npm inherits `npm_config_dry_run` from any
+  // npm invocation that started this one, and a pack that writes no file would
+  // otherwise be reported as a packaged release.
+  const child = spawn("npm", ["pack", "--json", "--dry-run=false"], { stdio: ["ignore", "pipe", "inherit"] });
   const chunks = [];
   child.stdout.on("data", (chunk) => chunks.push(chunk));
   child.once("error", reject);

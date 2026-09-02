@@ -9,7 +9,7 @@ deploykit deploy
 DeployKit handles validation, GitHub Actions, protected variables and secrets, VPS provisioning, exact-commit source checkout, Docker Compose or PM2 services, static frontends, automatic ports, Nginx, TLS, health checks, and safe resume.
 
 > [!IMPORTANT]
-> The one-file workflow below is what the current unreleased source does: `deploykit deploy` reads `deploykit.config.yaml`, compiles it, reconciles GitHub, provisions the VPS gateway, dispatches the workflow, and reports the result. It is **not yet accepted as production-ready**. The disposable-VPS acceptance matrix in [`docs/acceptance.md`](docs/acceptance.md) is the remaining gate, and only after it passes may this be described as production-ready. Released v0.1.3 still requires the legacy flags and self-hosted-runner setup; those commands remain available here for projects already on that path.
+> The one-file workflow below is what v0.1.4 does: `deploykit deploy` reads `deploykit.config.yaml`, compiles it, reconciles GitHub, provisions the VPS gateway, dispatches the workflow, and reports the result. It is **not yet accepted as production-ready**. The disposable-VPS acceptance matrix in [`docs/acceptance.md`](docs/acceptance.md) is the remaining gate — that document now names, per row, which automated suite proves the logic and exactly what is left for real hardware — and only after it passes may this be described as production-ready. v0.1.3 and earlier still require the legacy flags and self-hosted-runner setup; those commands remain available here for projects already on that path.
 
 ## Contents
 
@@ -28,6 +28,8 @@ Before deployment, the user must control these external resources:
 - A trusted application repository whose deployable commit is pushed to GitHub.
 - A protected default branch and an authenticated GitHub CLI session with permission to manage the repository, Actions, deploy keys, and the target Environment.
 - An Ubuntu 22.04 or 24.04 amd64/arm64 VPS reachable with an administrator SSH identity.
+- That administrator account must be able to run `sudo -n true` — root, or an account with passwordless sudo. DeployKit never opens an interactive prompt on the host.
+- The administrator private key must have **no passphrase**, and `server.host`/`server.port` must be the real address rather than a `~/.ssh/config` alias. Every administrator connection runs with `-F /dev/null`, `BatchMode=yes`, `IdentityAgent=none`, and `PasswordAuthentication=no`, so your SSH config, your agent, and any password prompt are all deliberately out of reach: the only credential that can open the connection is the file named by `server.identityFile`.
 - The VPS ED25519 host-key fingerprint verified through a trusted channel.
 - Direct DNS A and/or AAAA records for every configured domain pointing to the VPS. CNAME and proxied/CDN records are not accepted.
 - Production-ready application build inputs, such as Dockerfiles, Compose files, package scripts, health endpoints, and static build output settings.

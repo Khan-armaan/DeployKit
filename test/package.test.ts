@@ -362,7 +362,7 @@ describe("the packaged CLI, installed and run", () => {
       existsSync(resolve("dist", "cli.js")) && existsSync(resolve("dist", "server-cli.cjs")),
       "run `npm run build` before this suite; it verifies the built artifact",
     ).toBe(true);
-    const { stdout } = await run("npm", ["pack", "--json", "--pack-destination", root], {
+    const { stdout } = await run("npm", ["pack", "--json", "--dry-run=false", "--pack-destination", root], {
       cwd: resolve("."),
       maxBuffer: 32 * 1024 * 1024,
     });
@@ -370,9 +370,17 @@ describe("the packaged CLI, installed and run", () => {
     tarball = join(root, filename);
 
     prefix = join(root, "prefix");
+    // `--dry-run=false` on both npm calls above and here: npm reads its own
+    // configuration from the environment, so an ambient `npm_config_dry_run` —
+    // which `npm publish --dry-run` of this package sets while it runs
+    // `prepublishOnly` — would otherwise make the pack write no tarball and the
+    // install create no prefix, and deliverable 3 would silently verify nothing.
     await run(
       "npm",
-      ["install", "--global", "--prefix", prefix, "--prefer-offline", "--no-audit", "--no-fund", tarball],
+      [
+        "install", "--global", "--dry-run=false", "--prefix", prefix,
+        "--prefer-offline", "--no-audit", "--no-fund", tarball,
+      ],
       { cwd: root, maxBuffer: 32 * 1024 * 1024 },
     );
     binary = join(prefix, "bin", "deploykit");
