@@ -112,6 +112,10 @@ export interface WorkflowDispatchRequest {
   readonly targetName: string;
   readonly commitSha: GitCommitSha;
   readonly manifestDigest: ManifestDigest;
+  /** The freshly verified default-branch commit the workflow is read from. */
+  readonly workflowSha: GitCommitSha;
+  /** The authenticated GitHub actor the dispatched run must be attributed to. */
+  readonly actor: string;
   readonly resume: boolean;
   readonly dryRun: boolean;
 }
@@ -123,6 +127,7 @@ export interface WorkflowDispatchReceipt {
 
 export interface WorkflowRunIdentity {
   readonly id: number;
+  readonly repository: string;
   readonly url: string;
   readonly workflowPath: string;
   readonly event: "workflow_dispatch";
@@ -320,6 +325,8 @@ export interface OrchestratorResult {
   readonly manifestDigest: ManifestDigest | null;
   readonly setupPullRequestNumber: number | null;
   readonly workflowRunId: number | null;
+  /** The GitHub run page, so an operator never needs raw workflow logs. */
+  readonly workflowRunUrl: string | null;
   readonly httpsUrl: string | null;
   readonly ports: readonly {
     readonly service: string;

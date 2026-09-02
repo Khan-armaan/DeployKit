@@ -475,6 +475,20 @@ Completion gate:
 - Secret canaries are absent from artifacts, arguments, logs, errors, state, and checkpoints.
 - Bare `deploykit deploy` has not yet been switched to an unaccepted path.
 
+Delivered by: `src/orchestrator/production.ts` (the composition root and the gateway-key access provider), `src/orchestrator/github-port.ts`, `src/orchestrator/gateway-transport.ts`, `src/orchestrator/config-port.ts`, `src/orchestrator/operation-store.ts`, `src/orchestrator/reporting.ts`, and `test/orchestrator-integration.test.ts` with `test/helpers/hermetic-world.ts`.
+
+Nothing new was invented at the boundaries. Each adapter is a seam onto a module an earlier phase already froze and tested — the bounded `gh` client, the three reconcilers, the administrator SSH port, the crash-safe key rotator, the secure config filesystem — so the only genuinely new code is the wiring and the two operations no earlier phase owned: dispatching the reviewed workflow and correlating the run it produced.
+
+Correlation uses the only key that is actually observable. GitHub does not report a run's `workflow_dispatch` inputs, but it does report the run's name, and the managed workflow's `run-name` is `DeployKit <target> <request uuid>`. A run whose name is not that exact shape is not correlated at all. A rerun that lost its local record would otherwise mint a new UUID and dispatch a duplicate; it cannot, because an *active* run of the same workflow for the same target is adopted instead — strictly safer than dispatching, since the workflow's target-keyed concurrency group would have queued the second one behind the first anyway. A run that already finished without success is never adopted, so a genuine retry still dispatches. `verifyRunIdentity` then re-checks repository, workflow path, event, ref, target, request-id shape, actor, and — for a run this invocation just dispatched — the exact default-branch SHA whose control-artifact bytes were verified a moment earlier. An adopted run legitimately predates a later default-branch commit, so requiring the SHA there would refuse a run that is still the right one to follow.
+
+The gateway key's lifecycle is the one policy the wiring had to own, because it spans both planes. `GatewayAccessProvider` now receives the administrator connection, the expected binding, the proven repository-key fingerprint, and a dry-run flag, and it may answer with a *session* rather than bare facts: `prepare` generates into a mode-0700 temporary directory, stages the public half as a pending owned entry, and proves it with a real gateway session; the state machine uploads the private half with the Environment; `activate` promotes the pending entry only once that upload has landed; and `dispose` runs in a `finally`, so the local private key never outlives the invocation whether it succeeded, failed, or was interrupted. Activation is refused outright when the Environment did not actually reconcile, because promoting a key GitHub does not hold would strand the workflow. A dry run reaches none of it: the provider stages nothing, uploads nothing, and returns no secrets.
+
+The local operation record moved out of the application repository. It lives under the operator's own state directory, named by a digest of `(repository, target id)` so listing the directory discloses no repository names, opened with `O_NOFOLLOW`, and written atomically with mode `0600`. DeployKit never writes an application-owned file, and losing the record still costs nothing.
+
+One real defect surfaced only once the production adapters were wired together, and the hermetic suite is what caught it: the pinned `known_hosts` value was being handed to the Environment with a terminating newline, which `gh` strips, so the reconciler could never read the variable back byte for byte and every rerun re-rotated the gateway key against an Environment that read as permanently drifted. The pinned line is now stored exactly as `ssh-keyscan` produced it, and the workflow and the local transport each append the newline where they materialize the file.
+
+`test/orchestrator-integration.test.ts` replaces only the two process boundaries — one in-memory GitHub behind `gh` argv, one in-memory Ubuntu host behind `ssh`/`scp` argv — and drives a real Git repository, a real mode-0600 config, real canonical protocol frames, and the real state directory through fresh, dry-run, no-wait, interrupted-rotation, interrupted-reconciliation, failed-run, retry, moved-ref, and canary scenarios. `src/orchestrator/production.ts` is unreachable from `src/index.ts` and from `src/cli.ts`, and bare `deploykit deploy` still stops at `DK_UNSUPPORTED` after compiling.
+
 ### Phase 13 — CLI cutover, legacy migration, and documentation
 
 Depends on: Phase 12 complete.
@@ -542,7 +556,7 @@ Completion gate:
 | 9 | GitHub client primitives | Complete |
 | 10 | Control artifacts/setup PR | Complete |
 | 11 | Cross-plane keys/Environment | Complete |
-| 12 | Full orchestration/dispatch | Planned |
+| 12 | Full orchestration/dispatch | Complete |
 | 13 | CLI cutover/migration/docs | Planned |
 | 14 | Package acceptance/release | Planned |
 

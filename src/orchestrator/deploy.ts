@@ -119,10 +119,48 @@ export interface OrchestratorRunOptions {
   readonly polling?: OrchestratorPollingOptions;
 }
 
+/**
+ * Everything a provider needs to reach the host it is being asked about. The
+ * first two arguments are passed positionally as well, so a provider that only
+ * needs the deployment context keeps its original shape.
+ */
+export interface GatewayAccessRequest {
+  readonly context: DeploymentContext;
+  readonly handshake: GatewayHandshakeResult;
+  readonly connection: AdministratorSshConnection;
+  readonly binding: RootOwnedGatewayBinding;
+  /** The VPS-held read-only key this run proved, when it proved one. */
+  readonly repositoryKeyFingerprint: string | null;
+  /** True when nothing may be staged, uploaded, or rotated. */
+  readonly dryRun: boolean;
+}
+
+/**
+ * A gateway key that has been staged and proven but is not yet the host's
+ * active entry. `activate` is called once the Environment holds the uploaded
+ * private key, and `dispose` always runs before the invocation returns —
+ * success, failure, or dry run — so the local private key never outlives it.
+ */
+export interface GatewayAccessSession {
+  readonly facts: GatewayAccessFacts;
+  activate?(): Promise<void>;
+  dispose?(): Promise<void>;
+}
+
 export type GatewayAccessProvider = (
   context: DeploymentContext,
   handshake: GatewayHandshakeResult,
-) => Promise<GatewayAccessFacts> | GatewayAccessFacts;
+  request: GatewayAccessRequest,
+) =>
+  | Promise<GatewayAccessFacts | GatewayAccessSession>
+  | GatewayAccessFacts
+  | GatewayAccessSession;
+
+function asGatewayAccessSession(
+  value: GatewayAccessFacts | GatewayAccessSession,
+): GatewayAccessSession {
+  return "facts" in value ? value : { facts: value };
+}
 
 const DEFAULT_POLLING = Object.freeze({
   intervalMs: 5_000,
@@ -304,6 +342,8 @@ interface RunState {
   readiness: OperationReadiness;
   setupPullRequestNumber: number | null;
   workflowRunId: number | null;
+  /** Reported to the operator instead of raw logs; never persisted. */
+  workflowRunUrl: string | null;
   createdAt: string;
 }
 
@@ -336,6 +376,7 @@ export async function runDeployment(
   let run: RunState | undefined;
   let deployment: GatewayDeploymentResult | undefined;
   let secretValues: readonly string[] = [];
+  let gatewaySession: GatewayAccessSession | undefined;
 
   const failureResult = (error: unknown): OrchestratorResult => ({
     outcome: outcomeFor(error instanceof DeployKitError ? error.code : "DK_COMMAND_FAILED"),
@@ -346,6 +387,7 @@ export async function runDeployment(
     manifestDigest: context?.compiled.digest ?? null,
     setupPullRequestNumber: run?.setupPullRequestNumber ?? null,
     workflowRunId: run?.workflowRunId ?? null,
+    workflowRunUrl: run?.workflowRunUrl ?? null,
     httpsUrl: null,
     ports: [],
     healthy: null,
@@ -525,6 +567,7 @@ export async function runDeployment(
       readiness: resumable ? stored.readiness : UNVERIFIED_READINESS,
       setupPullRequestNumber: resumable ? stored.setupPullRequestNumber : null,
       workflowRunId: resumable ? stored.workflowRunId : null,
+      workflowRunUrl: null,
       createdAt: resumable ? stored.createdAt : now,
     };
     if (!REQUEST_ID_PATTERN.test(run.requestId)) {
@@ -739,6 +782,7 @@ export async function runDeployment(
     let desiredEnvironment: DesiredGitHubEnvironment | undefined;
     let environmentState: GitHubEnvironmentState | undefined;
     let access: GatewayAccessFacts | undefined;
+    let environmentReconciled = false;
 
     // Secrets are uploaded in this step, so both readiness facts that make an
     // upload safe are asserted first rather than assumed from the flow above:
@@ -753,7 +797,17 @@ export async function runDeployment(
     }
 
     if (handshake !== undefined) {
-      access = await options.gatewayAccess(context, handshake);
+      gatewaySession = asGatewayAccessSession(
+        await options.gatewayAccess(context, handshake, {
+          context,
+          handshake,
+          connection,
+          binding: expectedBinding,
+          repositoryKeyFingerprint: repositoryPublicKeyFingerprint,
+          dryRun,
+        }),
+      );
+      access = gatewaySession.facts;
       desiredEnvironment = planner.environment(context, access);
       environmentState = await deps.github.inspectEnvironment(desiredEnvironment);
       if (environmentState.status === "conflict") {
@@ -772,6 +826,7 @@ export async function runDeployment(
           );
         } else {
           environmentState = await deps.github.reconcileEnvironment(desiredEnvironment);
+          environmentReconciled = true;
           if (environmentState.status === "conflict") {
             throw orchestratorError(
               "DK_ENVIRONMENT_CONFLICT",
@@ -794,6 +849,28 @@ export async function runDeployment(
           managedResourceDigest: environmentState.managedResourceDigest,
         },
       };
+
+      // The private key is only now in the target Environment, so the staged
+      // public entry can become the host's active one. Before this promotion
+      // the previously proven key still works and the new entry is inert;
+      // after it the new key works and the old owned entry is gone. There is
+      // no window in which neither is accepted.
+      if (!dryRun && gatewaySession.activate !== undefined) {
+        if (!environmentReconciled) {
+          throw orchestratorError(
+            "DK_KEY_ROTATION_FAILED",
+            `The '${context.githubEnvironment}' Environment did not receive the gateway key staged on ${connection.host}, so it was left inert`,
+          );
+        }
+        await gatewaySession.activate();
+        await emit(
+          "info",
+          "environment",
+          "DK_GATEWAY_KEY_ACTIVATED",
+          `Activated the workflow-to-VPS gateway key on ${connection.host} and removed the previous DeployKit entry`,
+        );
+      }
+
       if (!dryRun) {
         await emit(
           "info",
@@ -879,6 +956,11 @@ export async function runDeployment(
       targetName: context.targetName,
       commitSha,
       manifestDigest: compiled.digest,
+      // The default-branch commit whose control-artifact bytes were verified a
+      // moment ago, and the actor GitHub answered the preflight as. A run that
+      // does not carry both is not the run this invocation asked for.
+      workflowSha: recheckArtifacts.defaultBranchCommitSha,
+      actor: facts.authenticatedActor,
       resume: run.workflowRunId !== null || stored?.lastFailure != null,
       // A local `--dry-run` never reaches dispatch. The frozen flag exists for a
       // future remote dry run and is deliberately false here.
@@ -886,7 +968,9 @@ export async function runDeployment(
     };
 
     let workflowRun = await deps.github.findWorkflowRun(dispatchRequest);
+    let dispatchedNow = false;
     if (workflowRun === undefined) {
+      dispatchedNow = true;
       await deps.github.dispatchWorkflow(dispatchRequest);
       await emit(
         "info",
@@ -919,11 +1003,12 @@ export async function runDeployment(
       );
     }
 
-    verifyRunIdentity(workflowRun, dispatchRequest, context.defaultBranch);
+    verifyRunIdentity(workflowRun, dispatchRequest, context.defaultBranch, dispatchedNow);
     // A run correlated by deployment identity rather than by request ID becomes
     // this operation's run, so a later rerun correlates it exactly.
     run.requestId = workflowRun.requestId;
     run.workflowRunId = workflowRun.id;
+    run.workflowRunUrl = workflowRun.url;
     run.readiness = {
       ...run.readiness,
       dispatch: { ready: true, requestId: workflowRun.requestId, workflowRunId: workflowRun.id },
@@ -1020,6 +1105,11 @@ export async function runDeployment(
     }
     await deps.output.result(result);
     throw error;
+  } finally {
+    // The local gateway private key never outlives the invocation that made
+    // it, whether the run succeeded, failed, or was interrupted after the
+    // inspection that needed it.
+    await gatewaySession?.dispose?.().catch(() => undefined);
   }
 }
 
@@ -1079,20 +1169,31 @@ async function readOperationRecord(
 
 /**
  * A correlated run must be the managed workflow, dispatched manually from the
- * protected default branch, for this target. Anything else is a different run
- * that happens to share a request ID or identity.
+ * protected default branch, by this actor, for this target. Anything else is a
+ * different run that happens to share a request ID or identity.
+ *
+ * The workflow SHA is checked exactly when this invocation dispatched the run,
+ * because only then is "the default branch DeployKit just verified" the same
+ * commit the run was started from. An *adopted* run legitimately predates a
+ * later default-branch commit, so requiring the SHA there would refuse a run
+ * that is still the right one to follow.
  */
 function verifyRunIdentity(
   run: WorkflowRunState,
   request: WorkflowDispatchRequest,
   defaultBranch: string,
+  dispatchedNow: boolean,
 ): void {
   const problems: string[] = [];
+  if (run.repository !== request.repository) problems.push("repository");
   if (run.workflowPath !== request.workflowPath) problems.push("workflow path");
   if (run.event !== "workflow_dispatch") problems.push("event");
   if (run.workflowRef !== defaultBranch) problems.push("workflow ref");
   if (run.targetName !== request.targetName) problems.push("target");
   if (!REQUEST_ID_PATTERN.test(run.requestId)) problems.push("request id");
+  if (!GIT_COMMIT_SHA_PATTERN.test(run.workflowSha)) problems.push("workflow sha");
+  else if (dispatchedNow && run.workflowSha !== request.workflowSha) problems.push("workflow sha");
+  if (run.actor !== request.actor) problems.push("actor");
   if (problems.length > 0) {
     throw orchestratorError(
       "DK_DISPATCH_NOT_READY",
@@ -1199,6 +1300,7 @@ function successResult(
     manifestDigest: context.compiled.digest,
     setupPullRequestNumber: run.setupPullRequestNumber,
     workflowRunId: workflowRunId ?? run.workflowRunId,
+    workflowRunUrl: run.workflowRunUrl,
     httpsUrl: outcome === "succeeded" ? `https://${context.primaryDomain}/` : null,
     ports: deployment?.ports ?? [],
     healthy: deployment === null ? null : health.length > 0 && health.every((entry) => entry.healthy),

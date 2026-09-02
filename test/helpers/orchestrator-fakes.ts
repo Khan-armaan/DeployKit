@@ -382,6 +382,7 @@ export class FakeGitHub implements GitHubPort {
     });
     this.world.runs.push({
       id,
+      repository: request.repository,
       url: `https://github.com/${request.repository}/actions/runs/${id}`,
       workflowPath: request.workflowPath,
       event: "workflow_dispatch",
