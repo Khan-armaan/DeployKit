@@ -4,7 +4,7 @@
 
 The restricted-gateway model documented below is now installed rather than only designed. `assets/bootstrap.sh` no longer enrolls a GitHub Actions runner: a freshly bootstrapped host receives the non-login `deploykit-gateway` account, a root-owned binding, one forced-command entry, one no-argument sudo entry, the checksum-verified standalone runtime, the pinned GitHub host keys, and a stable read-only repository key. No Actions Runner package, registration token, job hook, or service is placed on a fresh host.
 
-The remaining phases are the GitHub side of the flow — typed client primitives, the reviewed control artifacts, cross-plane key and Environment reconciliation, dispatch, and the CLI cutover — plus the disposable-VPS acceptance matrix. Until those pass, `deploykit deploy` still stops before dispatch and the model must not be described as production-ready.
+The typed GitHub client and its ownership rules are now implemented as well, but no command constructs them: nothing in the shipped CLI performs a GitHub mutation. The remaining phases are the reviewed control artifacts, cross-plane key and Environment reconciliation, dispatch, and the CLI cutover, plus the disposable-VPS acceptance matrix. Until those pass, `deploykit deploy` still stops before dispatch and the model must not be described as production-ready.
 
 ## Hosts bootstrapped by DeployKit v0.1.x
 
@@ -43,13 +43,21 @@ The one-file orchestrator replaces the persistent root runner with a GitHub-host
 - Workflow and repository keys are not interchangeable. Rotation must use DeployKit-owned staged and active entries so interruption cannot remove the last verified key or overwrite an unrelated key.
 - The forced command must reject a nonempty `SSH_ORIGINAL_COMMAND`, PTY allocation, forwarding, caller-selected repository or target identity, and protocol input that is malformed, oversized, duplicated, or uses an unsupported version.
 
+### GitHub client boundary
+
+- `gh` holds the GitHub credential. DeployKit never extracts, prints, or stores a token: it does not run `gh auth token`, does not read one from the environment, and does not place one in an argument, a file, or a diagnostic.
+- Secret material reaches a child process on stdin alone. Environment secrets are written with `gh secret set`; no secret value is ever an argument, a temporary file, a URL, or part of a retried request.
+- Safe reads retry with bounded backoff; mutations are attempted exactly once, because a failed write may still have landed and a repeat would create a second branch, pull request, or deploy key.
+- Responses are size-bounded before parsing, fields are read through checked accessors, listings stop at a frozen page ceiling by failing closed rather than truncating, and neither a response body nor the CLI's stderr is attached to any reported failure.
+- Repository deploy keys are created read-only, and a key that comes back with write access is refused rather than used.
+
 ### Configuration and control artifacts
 
 - `deploykit.config.yaml` may contain credentials. Before reading values, DeployKit must verify that it is inside the application repository, ignored by Git, untracked, unstaged, regular, non-symlinked, owned by the current user, and mode `0600`.
 - Backend values are partitioned and registered with the exact-value redactor before parse or validation diagnostics can expose them.
 - The compiled runtime manifest, workflow, ownership record, deployment identity, operation record, and all generated plans are secret-free. They may contain backend and generated secret **names**, never their values.
-- Managed workflow, runtime-manifest, and ownership files are reviewed on the protected default branch. DeployKit must prove ownership before changing or deleting a branch, pull request, deploy key, Environment value, or managed file; ambiguous ownership fails closed.
-- GitHub-hosted workflow dependencies are full-SHA pinned, checkout credentials are not persisted, permissions are minimal, and the protected target Environment remains subject to existing reviewers, wait timers, and branch restrictions.
+- Managed workflow, runtime-manifest, and ownership files are reviewed on the protected default branch. DeployKit proves ownership before changing or deleting a branch, pull request, deploy key, Environment value, or managed file: a resource is DeployKit's only when the committed ownership marker claims it, a managed name keyed by target id matches it, or it uses the reserved `DEPLOYKIT_` prefix an operator config may not set. Duplicate, writable, impersonating, or redirected resources are ambiguous and fail closed.
+- GitHub-hosted workflow dependencies are full-SHA pinned, checkout credentials are not persisted, permissions are minimal, and the protected target Environment remains subject to existing reviewers, wait timers, and branch restrictions. An Environment that already exists is read, never replaced, so its protection survives every rerun.
 
 ### Gateway identity and protocol
 

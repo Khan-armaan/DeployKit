@@ -346,6 +346,18 @@ Completion gate:
 - API calls use deterministic argument ordering and bounded parsing.
 - No GitHub or VPS mutation is performed by the production CLI yet.
 
+Delivered by: `src/orchestrator/github.ts` (the typed, bounded `gh` client and its frozen limits), `src/orchestrator/github-ownership.ts` (the ownership marker parser and the ambiguity refusals), and `test/orchestrator-github.test.ts`.
+
+`gh` stays the credential boundary. DeployKit never runs `gh auth token`, never reads a token out of the environment, and never copies one into an argument, a file, or a diagnostic; an unauthenticated CLI is recognized from its own refusal. Each `gh` refusal is classified once — rate limiting before permission, because GitHub answers both with 403 — and mapped to exactly one catalog code, so an operator sees the same instruction wherever the boundary was crossed.
+
+Reads and writes are treated differently on purpose. A GET retries with deterministic backoff and reports rate limiting only after the read budget is spent; a mutation is attempted exactly once, because a failed write may still have landed and repeating it is how a second branch, pull request, or deploy key appears. Pagination is DeployKit's own — fixed page size, fixed page ceiling, a stopping rule that does not vary with the installed CLI — and a listing that runs past the ceiling fails closed rather than truncating, since an unseen deploy key is precisely what would cause a duplicate.
+
+Nothing is trusted unparsed. Responses are size-bounded before `JSON.parse`, every field is read through a checked accessor, an unrecognized workflow-run status or conclusion is refused rather than coerced, and neither the response body nor the CLI's stderr is ever attached to a failure. Secret material reaches the child process only on stdin, through `gh secret set`; trailing newlines are stripped so the stored value cannot depend on how the CLI treats them.
+
+Ownership is a marker, never a guess. A resource is DeployKit's only when the committed ownership document claims it, a managed name keyed by target ID matches it, or it carries the reserved `DEPLOYKIT_` prefix the config schema forbids operators from using. Two deploy keys wearing DeployKit's title, a DeployKit key with write access, a foreign key holding the same public material, a pull request that redirected the setup branch, and an Environment value somebody else already set are all refused rather than reconciled. The marker parser separates the two failure kinds the catalog distinguishes: somebody else's document, another target's identity, or a claim on a file outside the three managed paths is an ownership conflict a human resolves, while a moved digest or a name list that grew a value is drift a rerun fixes.
+
+Deploy keys are created with `read_only: true` and a response that comes back writable is refused, an Environment that already exists is returned untouched so its reviewers, wait timer, and branch policy survive every rerun, and workflows are addressed by file name rather than by an encoded path. `src/orchestrator/` remains unexported from `src/index.ts`, no CLI path constructs the client, and bare `deploykit deploy` still stops at `DK_UNSUPPORTED` after compiling.
+
 ### Phase 10 — Secret-free control artifacts and setup pull request
 
 Depends on: Phase 9 complete.
@@ -501,7 +513,7 @@ Completion gate:
 | 6 | Gateway protocol/server command | Complete |
 | 7 | Exact-SHA source provider | Complete |
 | 8 | VPS bootstrap/key lifecycle | Complete |
-| 9 | GitHub client primitives | Planned |
+| 9 | GitHub client primitives | Complete |
 | 10 | Control artifacts/setup PR | Planned |
 | 11 | Cross-plane keys/Environment | Planned |
 | 12 | Full orchestration/dispatch | Planned |
