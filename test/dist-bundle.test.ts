@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { Writable } from "node:stream";
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 
 import { Reporter } from "../src/output.js";
 import { run as runProcess } from "../src/process.js";
@@ -61,6 +62,27 @@ class MemoryStream extends Writable {
     this.text += String(chunk);
     done();
   }
+}
+
+/**
+ * Lift the gateway client back out of the managed workflow. The step writes the
+ * client through a quoted heredoc inside a YAML block scalar, so the bytes on
+ * the branch are indented; parsing the document undoes the block indentation and
+ * the heredoc delimiters bound the client exactly.
+ */
+function gatewayClientFromWorkflow(workflow: string): string {
+  const document = parseYaml(workflow) as {
+    jobs?: Record<string, { steps?: { name?: string; run?: string }[] }>;
+  };
+  const steps = Object.values(document.jobs ?? {}).flatMap((job) => job.steps ?? []);
+  const step = steps.find((candidate) => candidate.name === "Install the bounded gateway client");
+  expect(step, "the managed workflow installs the bounded gateway client").toBeDefined();
+  const lines = (step?.run ?? "").split("\n");
+  const opened = lines.findIndex((line) => line.includes("<<'DEPLOYKIT_GATEWAY_CLIENT'"));
+  expect(opened, "the client is written through the reserved quoted heredoc").toBeGreaterThanOrEqual(0);
+  const closed = lines.indexOf("DEPLOYKIT_GATEWAY_CLIENT", opened + 1);
+  expect(closed, "the heredoc is closed").toBeGreaterThan(opened);
+  return lines.slice(opened + 1, closed).join("\n");
 }
 
 let bundle: BundledCli;
@@ -132,13 +154,17 @@ describe("the built dist bundle", () => {
     expect(result.commitSha).toBe(github.applicationCommitSha);
 
     // The gateway client asset was found from `dist/` and embedded verbatim in
-    // the managed workflow that reached the protected default branch.
+    // the managed workflow that reached the protected default branch. The
+    // workflow is YAML, so the client lives inside a block scalar and every one
+    // of its lines is indented; comparing against the raw file means parsing the
+    // document and lifting the heredoc body back out rather than substring
+    // matching the serialized bytes.
     const workflow = github.branches.get("main")?.files.get(".github/workflows/deploykit.yml") ?? "";
-    expect(workflow).toContain("DEPLOYKIT_GATEWAY_CLIENT");
+    const embedded = gatewayClientFromWorkflow(workflow);
     // Bytes that exist only inside the asset, so this proves the real file was
     // read from `dist/` rather than a fallback or an empty string.
     const client = await readFile(resolve("assets", "gateway-client.mjs"), "utf8");
-    expect(workflow).toContain(client.trimEnd());
+    expect(embedded).toBe(client.endsWith("\n") ? client.slice(0, -1) : client);
 
     // The installer assets were found from `dist/` and uploaded beside a real
     // packed tarball whose checksum the host confirmed.

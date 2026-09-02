@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## 0.1.4
+
 - Orchestrator Phase 2: bare `deploykit deploy` now scaffolds, securely reads, and strictly validates `deploykit.config.yaml` before doing anything else, and reports stable `DK_CONFIG_SCAFFOLDED`, `DK_CONFIG_INSECURE`, `DK_CONFIG_PLACEHOLDER`, and `DK_CONFIG_INVALID` failures with their frozen recovery instructions.
 - Secure read opens the file with `O_NOFOLLOW` and validates the opened descriptor: regular file, current-user owned, mode `0600` exactly, size-bounded, and untracked, unstaged, and Git-ignored inside the repository. Linked Git worktrees share the main checkout's exclude file.
 - Expanded `assets/deploykit.config.example.yaml` with Compose, PM2 (including a worker), static and service frontends, routing, health checks, automatic ports, a database block, and generated-secret names.
@@ -60,6 +64,12 @@
 - `npm run check` builds before it tests, so the packaged suite verifies the current artifact and no suite can race a rebuild that removed `dist/`.
 - The package API is now curated rather than accidental: the versioned contract shapes, the canonical runtime-manifest bytes and digest, the config loader/parser/compiler, the compiled-project validator, and the `DK_*` failure and recovery catalog are exported. The orchestrator's composition root, adapters, and operation store are not, and both halves of that boundary are asserted.
 - Deliverables 4-8 of Phase 14 — the disposable-VPS matrix on Ubuntu 22.04/24.04 amd64/arm64 with staging DNS and Let's Encrypt staging — remain outstanding, and the one-file orchestrator is not production-ready until they pass.
+- **Fixed the `npm run check` gate itself.** `test/dist-bundle.test.ts` compared the gateway client asset against the raw workflow bytes, but the managed workflow is YAML and embeds the client inside a block scalar, so every line of it is indented. The assertion could never pass. It now parses the workflow, finds the step that installs the client, and compares the heredoc body to the asset byte for byte — which is the check that was intended, and a stronger one.
+- Added the APP-01 rollback case to `test/server-apply.test.ts`: a phase that fails *after* the managed Nginx site is live disables exactly one link and nothing else. The durable checkpoints up to the failure, the port and domain reservations, the release, and the event log all survive, and the retry resumes from them and finishes. `health-verified` precedes `proxy-staged`, so this is a TLS or activation failure rather than a health failure; `docs/acceptance.md` said otherwise and now says what the phase order actually permits.
+- `npm run check` is verified on Node 20.11.0 — the exact floor `engines` declares — as well as on the pinned 22.18.0 and on current 24.x. CI runs all three, and fails early with a named tool when `git`, `ssh-keygen`, or `openssl` is missing, instead of a bare `ENOENT` from the middle of a suite.
+- `docs/acceptance.md` now states, per disposable-VPS matrix row, which automated suite proves its decision logic and exactly what is left for real infrastructure. Six rows — PKG-01, CFG-01, CFG-02, PROTO-01, DONE-01, and ID-01 — need no hardware and are complete; the rest are scoped to their residue rather than to the whole scenario. The matrix is still outstanding, and the one-file orchestrator is still not production-ready until it passes.
+- **Fixed a packing failure an operator would hit through the obvious wiring.** `resolveRuntimeBundle` shells out to `npm pack`, and npm reads its own configuration from the environment, where every `npm_config_*` variable is inherited by whatever an npm invocation starts. A `package.json` with `"deploy": "deploykit deploy"` is the natural way to wire this up — and `npm publish --dry-run` of DeployKit itself runs `prepublishOnly` with `npm_config_dry_run` set, which is how this was found: the pack reported a filename and wrote no file, so the tarball the gateway binding is bound to did not exist. Every call that must produce a real artifact now passes `--dry-run=false` explicitly, because a command-line flag beats inherited config. The VPS-side npm calls were already immune: the gateway runs them from `minimalGatewayEnvironment()`.
+- Added `scripts/refreeze-protocol-fixtures.mjs`. The compiled runtime manifest carries `requiredVersion: VERSION`, so a release changes bytes Phase 1 froze. The script restamps only that scalar: it recomputes a declared digest only where the declaration was already correct, leaves a deliberately noncanonical base64 payload alone, and refuses rather than guesses if the version's length would move a frozen byte count. Every hostile protocol fixture keeps the exact defect it encodes.
 
 ## 0.1.3
 

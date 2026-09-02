@@ -28,6 +28,7 @@ import {
   type GatewayRequestStream,
 } from "../src/gateway/index.js";
 import { compileRuntimeManifest } from "../src/orchestrator/compile.js";
+import { VERSION } from "../src/version.js";
 import { parseOperatorConfig } from "../src/orchestrator/config-schema.js";
 import {
   GATEWAY_PROTOCOL_LIMITS,
@@ -103,8 +104,11 @@ describe("gateway request streams", () => {
     expect(apply.operation).toBe("apply");
     expect(apply.dryRun).toBe(false);
     expect(apply.requestId).toBe("9f1c0a2b-3d4e-4f50-8a1b-2c3d4e5f6071");
+    // Frozen, not derived: the point is that these exact bytes still hash to
+    // this exact value. A release moves it, through
+    // `scripts/refreeze-protocol-fixtures.mjs`, and nothing else may.
     expect(apply.manifestDigest?.value).toBe(
-      "e1c4761107ba005371e9dbe43c39629c6edda6ff7f7c5bc96905ae7b847d524a",
+      "32ae720818174f5184e0c5e5cc270a31d0cb2ec4e1e791627436082e20e2d657",
     );
     expect(apply.manifest?.target.targetId).toBe(binding.targetId);
     expect([...apply.secrets.keys()]).toEqual(["CERTBOT_EMAIL", "DATABASE_URL", "POSTGRES_PASSWORD"]);
@@ -268,7 +272,7 @@ describe("canonical runtime manifest", () => {
       bytes.toString("utf8").replace(
         '"metadata":\n  "name": "static-compose"\n  "requiredVersion"',
         '"metadata":\n  "requiredVersion"',
-      ).replace(': "0.1.3"\n', ': "0.1.3"\n  "name": "static-compose"\n'),
+      ).replace(`: "${VERSION}"\n`, `: "${VERSION}"\n  "name": "static-compose"\n`),
       "utf8",
     );
     expect(reordered.equals(bytes)).toBe(false);

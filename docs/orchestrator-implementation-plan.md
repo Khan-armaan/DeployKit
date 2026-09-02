@@ -551,7 +551,11 @@ Completion gate:
 - No repository-controlled root runner is present on fresh hosts, and migrated hosts no longer route jobs to the legacy runner.
 - Only after this gate may the config-driven orchestrator be described as production-ready.
 
-Delivered by: `test/package.test.ts` (deliverables 1, 2, 3, 9, and 10), `src/package-root.ts`, and the Phase 14 progress table in `docs/acceptance.md`. Deliverables 4-8 remain outstanding: they require disposable Ubuntu 22.04/24.04 amd64/arm64 hosts, staging DNS, and Let's Encrypt staging, which no workstation or ordinary CI run can provide.
+Delivered by: `test/package.test.ts` (deliverables 1, 2, 3, 9, and 10), `test/dist-bundle.test.ts`, `src/package-root.ts`, and the Phase 14 progress table in `docs/acceptance.md`. Deliverables 4-8 remain outstanding: they require disposable Ubuntu 22.04/24.04 amd64/arm64 hosts, staging DNS, and Let's Encrypt staging, which no workstation or ordinary CI run can provide.
+
+What *is* provable without hardware has been separated from what is not. `docs/acceptance.md` now names, for every row of the disposable-VPS matrix, the suite that proves its decision logic and the residue a host must still supply. Six rows — PKG-01, CFG-01, CFG-02, PROTO-01, DONE-01, and ID-01 — turn out to need no infrastructure at all and are complete; the other seventeen are scoped to their residue instead of to the whole scenario, which is what the hardware run is for. This narrows the matrix; it does not close it, and the completion gate below is unchanged.
+
+Three defects surfaced while scoping it. `test/dist-bundle.test.ts` compared the gateway client asset against the serialized workflow, which embeds it inside a YAML block scalar, so the assertion could not pass and the gate was red; it now parses the workflow and compares the heredoc body byte for byte. The APP-01 rollback had no test at the phase-orchestration level, so one was added: a failure after the managed Nginx site is live disables exactly one link, retains every checkpoint and reservation, and the retry finishes from there. And `docs/acceptance.md` described that case as a *health* failure, which the phase order makes impossible — `health-verified` precedes `proxy-staged` — so it now describes a TLS or activation failure.
 
 `npm run check` now builds *before* it tests, so the packaged suite verifies this commit's artifact rather than the previous one — and so a suite that packs the package cannot race a rebuild that deleted `dist/` underneath it.
 
@@ -578,7 +582,7 @@ The package API was curated rather than left accidental. `src/index.ts` now expo
 | 11 | Cross-plane keys/Environment | Complete |
 | 12 | Full orchestration/dispatch | Complete |
 | 13 | CLI cutover/migration/docs | Complete |
-| 14 | Package/acceptance/release | Automated gates complete; disposable-VPS matrix outstanding |
+| 14 | Package/acceptance/release | Automated gates complete on Node 20.11/22.18/24; six matrix rows closed, the disposable-VPS residue outstanding |
 
 For each phase, follow the same closeout sequence:
 

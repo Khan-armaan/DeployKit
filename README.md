@@ -9,7 +9,7 @@ deploykit deploy
 DeployKit handles validation, GitHub Actions, protected variables and secrets, VPS provisioning, exact-commit source checkout, Docker Compose or PM2 services, static frontends, automatic ports, Nginx, TLS, health checks, and safe resume.
 
 > [!IMPORTANT]
-> The one-file workflow below is what the current unreleased source does: `deploykit deploy` reads `deploykit.config.yaml`, compiles it, reconciles GitHub, provisions the VPS gateway, dispatches the workflow, and reports the result. It is **not yet accepted as production-ready**. The disposable-VPS acceptance matrix in [`docs/acceptance.md`](docs/acceptance.md) is the remaining gate, and only after it passes may this be described as production-ready. Released v0.1.3 still requires the legacy flags and self-hosted-runner setup; those commands remain available here for projects already on that path.
+> The one-file workflow below is what v0.1.4 does: `deploykit deploy` reads `deploykit.config.yaml`, compiles it, reconciles GitHub, provisions the VPS gateway, dispatches the workflow, and reports the result. It is **not yet accepted as production-ready**. The disposable-VPS acceptance matrix in [`docs/acceptance.md`](docs/acceptance.md) is the remaining gate — that document now names, per row, which automated suite proves the logic and exactly what is left for real hardware — and only after it passes may this be described as production-ready. v0.1.3 and earlier still require the legacy flags and self-hosted-runner setup; those commands remain available here for projects already on that path.
 
 ## Contents
 

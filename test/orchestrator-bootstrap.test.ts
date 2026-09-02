@@ -27,7 +27,11 @@ import {
 } from "../src/orchestrator/administrator-ssh.js";
 import { GATEWAY_USER, type RootOwnedGatewayBinding } from "../src/orchestrator/contracts.js";
 import type { AdministratorSshConnection } from "../src/orchestrator/dependencies.js";
-import { REQUIRED_BUNDLE_ENTRIES, assertBundleContents } from "../src/orchestrator/runtime-bundle.js";
+import {
+  REQUIRED_BUNDLE_ENTRIES,
+  assertBundleContents,
+  resolveRuntimeBundle,
+} from "../src/orchestrator/runtime-bundle.js";
 import { DEFAULT_SERVER_ROOTS } from "../src/server/paths.js";
 import { VERSION } from "../src/version.js";
 
@@ -739,9 +743,11 @@ describe("local gateway bootstrap command", () => {
 describe("packed runtime bundle", () => {
   it("ships every file the installer reads and matches the published package name", async () => {
     const destination = await temporaryDirectory("deploykit-pack-");
-    const { stdout } = await run("npm", ["pack", resolve("."), "--json", "--pack-destination", destination], {
-      maxBuffer: 32 * 1024 * 1024,
-    });
+    const { stdout } = await run(
+      "npm",
+      ["pack", resolve("."), "--json", "--dry-run=false", "--pack-destination", destination],
+      { maxBuffer: 32 * 1024 * 1024 },
+    );
     const filename = (JSON.parse(stdout) as Array<{ filename: string }>)[0]?.filename ?? "";
     const packageFile = join(destination, filename);
 
@@ -752,5 +758,32 @@ describe("packed runtime bundle", () => {
     // The installer compares this exact name with the one inside the tarball,
     // so a rename can no longer make a real bootstrap fail at the last step.
     expect(filename.startsWith(manifest.name.replace("@", "").replace("/", "-"))).toBe(true);
+  }, 180_000);
+
+  /**
+   * npm reads its own configuration out of the environment, and every
+   * `npm_config_*` variable an npm invocation sets is inherited by whatever it
+   * starts. That is not a hypothetical: `"deploy": "deploykit deploy"` in a
+   * `package.json` is the obvious way to wire this up, and `npm publish
+   * --dry-run` of DeployKit itself runs the suite with `npm_config_dry_run`
+   * set. Under it, `npm pack` reports a filename and writes no file, so the
+   * bundle the gateway binding is bound to would simply not exist.
+   */
+  it("packs a real tarball even when the ambient npm invocation is a dry run", async () => {
+    const destination = await temporaryDirectory("deploykit-pack-dry-");
+    const previous = process.env["npm_config_dry_run"];
+    process.env["npm_config_dry_run"] = "true";
+    try {
+      const bundle = await resolveRuntimeBundle({ destination });
+      expect(bundle.version).toBe(VERSION);
+      const contents = await readFile(bundle.packageFile);
+      expect(contents.byteLength).toBeGreaterThan(0);
+      expect(createHash("sha256").update(contents).digest("hex")).toBe(bundle.packageSha256);
+      const entries = await assertBundleContents(bundle.packageFile);
+      for (const required of REQUIRED_BUNDLE_ENTRIES) expect(entries).toContain(required);
+    } finally {
+      if (previous === undefined) delete process.env["npm_config_dry_run"];
+      else process.env["npm_config_dry_run"] = previous;
+    }
   }, 180_000);
 });

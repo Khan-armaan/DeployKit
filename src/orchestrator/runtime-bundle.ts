@@ -123,7 +123,16 @@ export async function resolveRuntimeBundle(
   const packageRoot = options.packageRoot ?? localPackageRoot();
   const identity = await readPackageIdentity(packageRoot);
 
-  const packed = await run("npm", ["pack", packageRoot, "--json", "--pack-destination", options.destination]);
+  // `--dry-run=false` is explicit because npm reads its own configuration from
+  // the environment, and `npm_config_dry_run` is inherited by anything an npm
+  // lifecycle script starts. An operator whose `package.json` has
+  // `"deploy": "deploykit deploy"` — or a `npm publish --dry-run` of this very
+  // package — would otherwise reach a pack that reports a filename and writes
+  // no file. A command-line flag beats the inherited config, so the bundle is
+  // packed because this call asked for it, not because the ambient npm agreed.
+  const packed = await run("npm", [
+    "pack", packageRoot, "--json", "--dry-run=false", "--pack-destination", options.destination,
+  ]);
   let entries: Array<{ filename?: unknown }>;
   try {
     entries = JSON.parse(packed.stdout) as Array<{ filename?: unknown }>;
